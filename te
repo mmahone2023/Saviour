@@ -1,0 +1,9 @@
+[33mcommit 5c9499435a600906fd27d4e24c78caf51f72bd5b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Michael Mahone <mahonem57@gmail.com>
+Date:   Sun Apr 26 15:03:55 2026 -0500
+
+    Header: Updates to game
+    -Added victory music to file
+    -Synced music to begin at a specific event
+    -Delayed next level until completion of victory music
+    -Added pause method to both game and music

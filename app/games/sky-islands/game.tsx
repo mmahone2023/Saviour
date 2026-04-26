@@ -507,7 +507,7 @@ export default function SkyIslandsGame() {
               ☰
             </button>
             {isMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
+              <div className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-50 max-h-96 overflow-y-scroll overscroll-contain">
                 {/* Sky Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Sky Games
@@ -547,7 +547,7 @@ export default function SkyIslandsGame() {
                 <button
                   onClick={() => {
                     setIsMenuOpen(false);
-                    router.push('/games/sea/game');
+                    router.push('/games/sea');
                   }}
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
@@ -556,7 +556,7 @@ export default function SkyIslandsGame() {
                 <button
                   onClick={() => {
                     setIsMenuOpen(false);
-                    router.push('/games/land/game');
+                    router.push('/games/land');
                   }}
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
@@ -565,7 +565,7 @@ export default function SkyIslandsGame() {
                 <button
                   onClick={() => {
                     setIsMenuOpen(false);
-                    router.push('/games/city/game');
+                    router.push('/games/city');
                   }}
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
