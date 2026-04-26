@@ -89,7 +89,7 @@ export default function Home() {
 
         {/* Tagline */}
         <p className="mt-6 md:mt-8 text-center text-muted-foreground text-sm md:text-base lg:text-lg max-w-md px-4">
-          A wellness game that makes you feel better, without putting in "The Work".
+          A game where helping others helps you. 
         </p>
         <br></br>
 
@@ -103,7 +103,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="absolute bottom-0 left-0 right-0 py-4 text-center text-muted-foreground text-xs md:text-sm z-20">
-        <p>Choose your destiny. Become the Savior.</p>
+        <p>Choose your destiny. Which Saviour will you become?</p>
       </footer>
     </main>
   )

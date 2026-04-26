@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Phaser from 'phaser';
 import Link from 'next/link';
 import { Card } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 
 // Game Scene
 class SkyGameScene extends Phaser.Scene {
@@ -16,16 +15,13 @@ class SkyGameScene extends Phaser.Scene {
   private hearts: number = 0;
   private helpRadius: number = 100;
   private helpProgress: number = 0;
-  private npcHelpPoint: Phaser.Math.Vector2 | null = null;
   private levelComplete: boolean = false;
-  private canTransitionToNextLevel: boolean = false;
-  private levelMessages: Record<number, string> = {
-    1: 'You saved my life. Thank you so much!',
-    2: 'You sure do know how to sweep someone off their feet! Thank you!',
-    3: "I thought it was over, until you came through. You're my Saviour!",
-    4: "If you ever need anything, I'm at your service.",
-    5: "I can't believe you were able to keep me from drowning! Drinks on me!",
-  };
+  private isCarrying: boolean = false;
+  private baseVelocity: { x: number; y: number } = { x: 0, y: 0 }; // Store initial velocity
+  private npcHasBeenTouched: boolean = false;
+  private currentSpeed: number = 50; // Starting speed, increases by 5 each round
+  private isPaused: boolean = false;
+
   private npcList: Array<{
     name: string;
     emotion: string;
@@ -71,18 +67,23 @@ class SkyGameScene extends Phaser.Scene {
   ];
 
   onHeartEarned: ((hearts: number, level: number) => void) | null = null;
-  onLevelComplete: ((level: number) => void) | null = null;
   onGameComplete: (() => void) | null = null;
+  onPauseStateChange: ((isPaused: boolean) => void) | null = null;
+  private victorySound: Phaser.Sound.BaseSound | null = null;
 
   constructor() {
     super({ key: 'SkyGameScene' });
   }
 
   preload() {
-    // Generate simple graphics for assets
+    this.load.audio('victory', '/audio/saviour.wav');
   }
 
   create() {
+    // Initialize speed from registry for continuous rounds
+    const roundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
+    this.currentSpeed = roundData.baseSpeed;
+
     // Set scene background color to sky blue
     this.cameras.main.setBackgroundColor(0x87ceeb);
 
@@ -102,14 +103,14 @@ class SkyGameScene extends Phaser.Scene {
     this.addClouds();
 
     // Create player - use simple circle for now
-    this.player = this.physics.add.sprite(100, 300, null);
+    this.player = this.physics.add.sprite(100, 300, '__DEFAULT');
     this.player.setScale(1.5);
     this.player.setBounce(0.2);
     this.player.setCollideWorldBounds(true);
     this.player.setDepth(10);
 
     // Create simple player graphics (person with cape)
-    const playerGraphics = this.make.graphics({ x: 0, y: 0, add: false });
+    const playerGraphics = this.make.graphics({ x: 0, y: 0 }, false);
     // Cape (blue)
     playerGraphics.fillStyle(0x1e3a8a, 1); // Dark blue cape
     playerGraphics.beginPath();
@@ -138,11 +139,17 @@ class SkyGameScene extends Phaser.Scene {
 
     // Particle emitter for healing effect
     this.particles = this.add.particles(0xffff00);
-    this.particles.emitZoneSource = new Phaser.Geom.Circle(0, 0, 20);
     this.particles.stop();
 
     // Input
-    this.cursors = this.input.keyboard?.createCursorKeys();
+    this.cursors = this.input.keyboard?.createCursorKeys() || null;
+
+    // Add space key for pause
+    this.input.keyboard?.on('keydown-SPACE', () => {
+      this.togglePause();
+    });
+
+    this.victorySound = this.sound.add('victory', { volume: 0.8 });
 
     // Set up physics
     this.physics.world.setBounds(0, 0, 800, 600);
@@ -154,7 +161,6 @@ class SkyGameScene extends Phaser.Scene {
       { x: 100, y: 100, scaleX: 1, scaleY: 1 },
       { x: 300, y: 150, scaleX: 1.2, scaleY: 1.2 },
       { x: 600, y: 200, scaleX: 1, scaleY: 1 },
-      { x: 200, y: 350, scaleX: 0.8, scaleY: 0.8 },
     ];
 
     clouds.forEach(cloud => {
@@ -170,17 +176,35 @@ class SkyGameScene extends Phaser.Scene {
 
     const npcData = this.npcList[this.currentLevel - 1];
 
-    this.npc = this.physics.add.sprite(npcData.x, npcData.y, null);
-    this.npc.setVelocity(
-      Phaser.Math.Between(-20, 20),
-      Phaser.Math.Between(-10, 10)
-    );
-    this.npc.setBounce(1, 1);
-    this.npc.setCollideWorldBounds(true);
+    // Get round data to vary spawn position
+    const roundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
+    
+    // Vary x position based on round: cycles through different x positions
+    const xPositions = [150, 400, 650, 250, 550, 100, 700];
+    const spawnX = xPositions[(roundData.roundNumber - 1) % xPositions.length];
+    
+    // Start NPC at top with varied x position
+    this.npc = this.physics.add.sprite(spawnX, 50, '__DEFAULT');
+    
+    // Calculate falling velocity with angle
+    // Almost vertical: 5 degrees from vertical, speed is slow
+    const angle = 5;
+    const angleRad = angle * Math.PI / 180;
+    const speed = this.currentSpeed;
+    
+    // Alternate falling direction (left/right) based on level
+    const direction = this.currentLevel % 2 === 1 ? 1 : -1;
+    
+    const vx = speed * Math.sin(angleRad) * direction;
+    const vy = speed * Math.cos(angleRad);
+    
+    this.npc.setVelocity(vx, vy);
+    this.baseVelocity = { x: vx, y: vy };
+    this.npc.setCollideWorldBounds(false); // Allow it to fall off screen
     this.npc.setDepth(10);
 
     // Create NPC graphics based on level
-    const npcGraphics = this.make.graphics({ x: 0, y: 0, add: false });
+    const npcGraphics = this.make.graphics({ x: 0, y: 0 }, false);
     
     if (this.currentLevel === 1) {
       // Bird with broken wing (falling)
@@ -216,18 +240,30 @@ class SkyGameScene extends Phaser.Scene {
 
     this.npc.setTexture('npc');
 
-    this.npcHelpPoint = new Phaser.Math.Vector2(npcData.x, npcData.y);
     this.helpProgress = 0;
     this.levelComplete = false;
-    this.canTransitionToNextLevel = false;
+    this.isCarrying = false;
+    this.npcHasBeenTouched = false;
   }
 
   update() {
-    if (!this.player || this.levelComplete) return;
+    if (!this.player || this.isPaused || (this.levelComplete && !this.isCarrying)) return;
 
     // Player movement
-    const speed = 200;
+    const speed = 300;
     this.player.setVelocity(0);
+
+    if (this.isCarrying && this.npc) {
+      const flySpeed = 40;
+      const flyAngle = -45;
+      const flyVx = flySpeed * Math.cos((flyAngle * Math.PI) / 180);
+      const flyVy = flySpeed * Math.sin((flyAngle * Math.PI) / 180);
+
+      this.player.setVelocity(flyVx, flyVy);
+      this.npc.setPosition(this.player.x, this.player.y - 30);
+      this.npc.setVelocity(flyVx, flyVy);
+      return;
+    }
 
     if (this.cursors?.left.isDown) {
       this.player.setVelocityX(-speed);
@@ -241,79 +277,103 @@ class SkyGameScene extends Phaser.Scene {
       this.player.setVelocityY(speed);
     }
 
-    // For level 1, make the bird fall
-    if (this.currentLevel === 1 && this.npc) {
-      this.npc.setVelocityY(this.npc.body.velocity.y + 2); // Accelerate downward
-      // Stop at ocean surface
-      if (this.npc.y > 500) {
-        this.npc.setVelocity(0, 0);
-        this.npc.setPosition(750, 500);
-      }
-    }
-
-    // Check distance to NPC
-    if (this.player && this.npc) {
-      const distance = Phaser.Math.Distance.Between(
-        this.player.x,
-        this.player.y,
-        this.npc.x,
-        this.npc.y
-      );
-
-      if (distance < this.helpRadius) {
-        this.helpProgress += 1;
-
-        // Emit healing particles
-        if (this.particles) {
-          this.particles.emitParticleAt(this.npc.x, this.npc.y, 5);
+    if (this.npc) {
+      // NPC is falling at the initial angle
+      this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
+      
+      // Check if NPC touches water (below 450 pixels)
+      if (this.npc.y > 450 && !this.npcHasBeenTouched) {
+        // Character drowned - trigger "Help me" message
+        if (this.onHelpMeMessage) {
+          this.onHelpMeMessage();
         }
+        // Level fails - restart
+        this.time.delayedCall(3000, () => {
+          this.levelComplete = true;
+          this.scene.restart();
+        });
+      }
 
-        // Complete the level when help progress reaches threshold
-        if (this.helpProgress > 300) {
+      // Check distance to player for pickup
+      if (this.player) {
+        const distance = Phaser.Math.Distance.Between(
+          this.player.x,
+          this.player.y,
+          this.npc.x,
+          this.npc.y
+        );
+
+        if (distance < this.helpRadius && !this.npcHasBeenTouched) {
+          // Player caught the falling character!
+          this.npcHasBeenTouched = true;
+          this.isCarrying = true;
+          
+          if (this.onHeartEarned) {
+            this.hearts += 1;
+            this.onHeartEarned(this.hearts, this.currentLevel);
+          }
+
+          // Emit celebrating particles
+          if (this.particles) {
+            this.particles.emitParticleAt(this.npc.x, this.npc.y, 10);
+          }
+
           this.completeLevel();
         }
-      } else {
-        this.helpProgress = Math.max(0, this.helpProgress - 0.5);
       }
     }
   }
 
-  completeLevel() {
-    this.levelComplete = true;
-    this.hearts += 1;
-
-    if (this.onHeartEarned) {
-      this.onHeartEarned(this.hearts, this.currentLevel);
-    }
-
-    // Visual feedback
-    if (this.npc) {
-      this.tweens.add({
-        targets: this.npc,
-        scale: 1.5,
-        alpha: 0,
-        duration: 500,
-        ease: 'Quad.easeOut',
-      });
-    }
-
-    // Setup for next level or game end
-    if (this.currentLevel < 5) {
-      this.time.delayedCall(5000, () => {
-        this.nextLevel();
-      });
-    } else {
-      this.time.delayedCall(5000, () => {
-        if (this.onGameComplete) {
-          this.onGameComplete();
-        }
-      });
-    }
-  }
+  onHelpMeMessage: (() => void) | null = null;
 
   nextLevel() {
     this.currentLevel += 1;
     this.createNPC();
+  }
+
+  completeLevel() {
+    this.levelComplete = true;
+
+    const continueToNextCharacter = () => {
+      if (this.currentLevel < 5) {
+        this.nextLevel();
+      } else {
+        const currentRoundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
+
+        if (currentRoundData.roundNumber === 1) {
+          if (this.onGameComplete) {
+            this.onGameComplete();
+          }
+        } else {
+          const newRoundData = {
+            roundNumber: currentRoundData.roundNumber + 1,
+            baseSpeed: currentRoundData.baseSpeed + 2,
+          };
+          this.registry.set('skyGameRound', newRoundData);
+          this.scene.restart();
+        }
+      }
+    };
+
+    if (!this.victorySound) {
+      this.victorySound = this.sound.add('victory', { volume: 0.8 });
+    }
+
+    if (this.victorySound.isPlaying) {
+      this.victorySound.stop();
+    }
+
+    this.victorySound.once(Phaser.Sound.Events.COMPLETE, () => {
+      continueToNextCharacter();
+    });
+
+    if (this.sound.locked) {
+      this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
+        this.victorySound?.play();
+      });
+    } else {
+      this.victorySound.play();
+    }
   }
 
   getHelpProgress(): number {
@@ -331,19 +391,45 @@ class SkyGameScene extends Phaser.Scene {
   getNPCInfo() {
     return this.npcList[this.currentLevel - 1];
   }
+
+  togglePause() {
+    this.isPaused = !this.isPaused;
+    
+    if (this.isPaused) {
+      this.physics.pause();
+      if (this.victorySound?.isPlaying) {
+        this.victorySound.pause();
+      }
+    } else {
+      this.physics.resume();
+      if (this.victorySound?.isPaused) {
+        this.victorySound.resume();
+      }
+    }
+
+    if (this.onPauseStateChange) {
+      this.onPauseStateChange(this.isPaused);
+    }
+  }
+
+  getIsPaused(): boolean {
+    return this.isPaused;
+  }
 }
 
 // Main Game Component
 export default function SkyGame() {
   const gameRef = useRef<HTMLDivElement>(null);
-  const [game, setGame] = useState<Phaser.Game | null>(null);
+  const [, setGame] = useState<Phaser.Game | null>(null);
   const [hearts, setHearts] = useState(0);
   const [level, setLevel] = useState(1);
-  const [helpProgress, setHelpProgress] = useState(0);
+  const [, setHelpProgress] = useState(0);
   const [gameState, setGameState] = useState<'playing' | 'complete'>('playing');
   const [currentNPC, setCurrentNPC] = useState<string>('');
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
+  const [showHelpMessage, setShowHelpMessage] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const sceneRef = useRef<SkyGameScene | null>(null);
 
   const levelMessages: Record<number, string> = {
@@ -354,15 +440,25 @@ export default function SkyGame() {
     5: "I can't believe you were able to keep me from drowning! Drinks on me!",
   };
 
-  // Hide speech bubble after 3 seconds
+  // Hide speech bubble after 10 seconds
   useEffect(() => {
     if (showSpeechBubble) {
       const timer = setTimeout(() => {
         setShowSpeechBubble(false);
-      }, 3000);
+      }, 10000);
       return () => clearTimeout(timer);
     }
   }, [showSpeechBubble]);
+
+  // Hide help message after 2 seconds
+  useEffect(() => {
+    if (showHelpMessage) {
+      const timer = setTimeout(() => {
+        setShowHelpMessage(false);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [showHelpMessage]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -375,16 +471,16 @@ export default function SkyGame() {
       physics: {
         default: 'arcade',
         arcade: {
-          gravity: { y: 0 },
+          gravity: { x: 0, y: 2 },
           debug: false,
         },
       },
       scene: SkyGameScene,
     };
 
-    const phaserGame = new Phaser.Game(config);
     let updateInterval: NodeJS.Timeout;
-
+    const phaserGame = new Phaser.Game(config);
+    
     const handleGameReady = () => {
       const scene = phaserGame.scene.getScene('SkyGameScene') as SkyGameScene;
       if (scene) {
@@ -398,8 +494,16 @@ export default function SkyGame() {
           setShowSpeechBubble(true);
         };
 
+        scene.onHelpMeMessage = () => {
+          setShowHelpMessage(true);
+        };
+
         scene.onGameComplete = () => {
           setGameState('complete');
+        };
+
+        scene.onPauseStateChange = (paused: boolean) => {
+          setIsPaused(paused);
         };
 
         // Update loop for progress bar
@@ -485,15 +589,40 @@ export default function SkyGame() {
             </div>
           </div>
         )}
+
+        {/* Help Me Message */}
+        {showHelpMessage && (
+          <div className="absolute top-1/3 left-16 animate-in fade-in slide-in-from-left-4 duration-500">
+            <div className="bg-red-100 rounded-lg shadow-2xl p-6 max-w-xs relative border-2 border-red-400">
+              {/* Bubble pointer */}
+              <div className="absolute -left-4 top-8 w-0 h-0 border-r-8 border-t-4 border-b-4 border-r-red-100 border-t-transparent border-b-transparent"></div>
+              <p className="text-red-800 text-lg font-bold leading-relaxed animate-pulse">
+                Help me! Help me!
+              </p>
+            </div>
+          </div>
+        )}
+
+        {isPaused && (
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center rounded-lg">
+            <div className="text-center">
+              <h2 className="text-5xl font-bold text-white mb-4">⏸ PAUSED</h2>
+              <p className="text-white/80 text-lg mb-8">Press SPACE to resume</p>
+              <div className="text-white/60 text-sm">
+                <p>Use arrow keys to move</p>
+                <p>Space to pause/resume</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Help Progress Bar and Info */}
       <div className="bg-black/40 backdrop-blur-sm border-t border-white/20 p-4">
         <div className="max-w-7xl mx-auto">
-          <p className="text-white/70 text-sm mb-2">Help Progress</p>
-          <Progress value={helpProgress} className="bg-white/20" />
-          <p className="text-white/50 text-xs mt-2">
-            Get close to the character and help them recover!
+          <p className="text-white/70 text-sm mb-2">Stay Alert!</p>
+          <p className="text-white/50 text-sm">
+            Catch the falling characters before they hit the water! Use arrow keys to move. Carry them upward to safety.
           </p>
         </div>
       </div>
@@ -512,12 +641,15 @@ export default function SkyGame() {
             <p className="text-2xl font-bold text-yellow-600 mb-6">
               Total Hearts Earned: {hearts}/5
             </p>
+            <p className="text-lg text-yellow-700 mb-6">
+              Continue your adventure to the Sky Islands...
+            </p>
             <div className="flex gap-4">
               <Link
-                href="/games/sky/play"
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-sky-400 to-blue-500 text-white font-semibold rounded-lg hover:from-sky-300 hover:to-blue-400 transition"
+                href="/games/sky-islands/play"
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold rounded-lg hover:from-purple-400 hover:to-pink-400 transition"
               >
-                Play Again
+                🏝️ Sky Islands
               </Link>
               <Link
                 href="/"
