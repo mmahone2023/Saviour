@@ -73,7 +73,7 @@ export default function SkyFortressPage() {
             🏰 Sky Fortress
           </h1>
           <p className="text-2xl text-white/90 drop-shadow-md">
-            Defend the fortress dwellers from the void!
+            Earn all five rescue hearts — then see the popup and reflection when you&apos;re ready for what&apos;s next.
           </p>
         </div>
 
@@ -84,7 +84,8 @@ export default function SkyFortressPage() {
               <span>⚔️</span> Mission
             </h2>
             <p className="text-base leading-relaxed">
-              Catch the fortress dwellers as they fall from the sky. They depend on you to save them from the void!
+              Catch the fortress dwellers as they fall. After five successful rescues (five hearts), the celebratory popup
+              appears and you can proceed to reflection or wrap up from the screens that follow.
             </p>
           </div>
 
@@ -94,9 +95,9 @@ export default function SkyFortressPage() {
             </h2>
             <ul className="text-base space-y-1">
               <li>• Use <strong>Arrow Keys</strong> to move</li>
-              <li>• Catch falling dwellers</li>
-              <li>• Earn a heart for each save</li>
-              <li>• 5 levels to complete</li>
+              <li>• Catch falling dwellers — one heart per rescue (five total)</li>
+              <li>• The &quot;5 hearts&quot; popup appears only after your fifth successful save</li>
+              <li>• Then continue to reflection or exit from the screens that follow</li>
             </ul>
           </div>
 
@@ -115,7 +116,7 @@ export default function SkyFortressPage() {
 
           <div className="bg-gradient-to-r from-sky-100 to-blue-100 p-3 rounded-lg">
             <p className="text-sm font-semibold text-blue-900">
-              ⭐ Tip: After each level, the dwellers fall faster—stay sharp!
+              ⭐ Tip: Later drops can feel faster — stay centered. Completion popups unlock only once you&apos;ve earned all five hearts.
             </p>
           </div>
         </div>
@@ -137,7 +138,7 @@ export default function SkyFortressPage() {
         </div>
 
       <div className="mt-12 text-white/70 text-sm text-center max-w-md">
-        <p>The fortress needs you. Can you save them all?</p>
+        <p>Five rescues, five hearts — then the congratulations popup and your next choices unlock.</p>
       </div>
       </div>
     </main>

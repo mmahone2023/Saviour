@@ -78,7 +78,8 @@ export default function SkyIslandsPage() {
         </h1>
 
         <p className="text-sky-100/90 max-w-md mb-8 text-lg">
-          People are falling from the floating islands! Rescue them and earn hearts. Five levels of sky-saving adventure!
+          Islanders are falling from the floating islands — rescue them one by one and earn up to five hearts. The popup
+          and completion choices that let you continue appear only after all five hearts are earned.
         </p>
 
         <div className="flex gap-4">

@@ -4,6 +4,24 @@ import { useEffect, useRef, useState } from 'react';
 import * as Phaser from 'phaser';
 import Link from 'next/link';
 import { Card } from '@/components/ui/card';
+import { SkyGameCompletionCard } from '@/components/sky-game-completion-card';
+import {
+  createSkyArrowChallengeState,
+  notifySkyArrowFirstRescue,
+  skyArrowDisabledMessageIndexForLevel,
+  tickSkyArrowChallenge,
+  type SkyArrowChallengeState,
+} from '@/app/games/sky-arrow-challenge';
+import { destroyTaggedRescueNpcs, SKY_RESCUE_NPC_DATA_KEY } from '@/app/games/sky-rescue-single-npc';
+import {
+  mountSkyFailBubbleMessages,
+  SKY_BASE_FAIL_MESSAGES,
+  SKY_FAIL_FEEDBACK_MS,
+} from '@/app/games/sky-rescue-fail-bubbles';
+
+const SPEECH_BUBBLE_RESCUE_MS = 10000;
+
+const MAX_LEVEL = 5;
 
 // Game Scene
 class SkyGameScene extends Phaser.Scene {
@@ -19,6 +37,17 @@ class SkyGameScene extends Phaser.Scene {
   private isCarrying: boolean = false;
   private baseVelocity: { x: number; y: number } = { x: 0, y: 0 }; // Store initial velocity
   private npcHasBeenTouched: boolean = false;
+  /** Prevents stacking multiple scene.restart timers when the NPC stays below the water line. */
+  private drownRestartScheduled: boolean = false;
+  /** If set, a delayed fail→restart is pending; must be cleared when the player saves the NPC instead. */
+  private drownFailTimer: Phaser.Time.TimerEvent | null = null;
+  /** While true (victory clip playing), ignore water-line fail — avoids restart racing the rescue flow. */
+  private inVictorySequence: boolean = false;
+  private failBubbleLayer: Phaser.GameObjects.Container | null = null;
+  /** Bumps on each completeLevel; invalidates stale sound `complete` / `unlocked` callbacks. */
+  private victoryAdvanceSeq: number = 0;
+  /** Ensures `complete` cannot advance the level twice for the same rescue (same seq). */
+  private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 50; // Starting speed, increases by 5 each round
   private isPaused: boolean = false;
 
@@ -58,18 +87,20 @@ class SkyGameScene extends Phaser.Scene {
       description: 'Calm the scared storm child',
     },
     {
-      name: '⭐ Sky Guardian',
+      name: '⭐ Little Big Moma',
       emotion: 'Weakened',
       x: 700,
       y: 110,
-      description: 'Restore power to the sky guardian',
+      description: 'Restore hope and positivity',
     },
   ];
 
   onHeartEarned: ((hearts: number, level: number) => void) | null = null;
   onGameComplete: (() => void) | null = null;
   onPauseStateChange: ((isPaused: boolean) => void) | null = null;
+  onArrowDisabledNudge: ((message: string) => void) | null = null;
   private victorySound: Phaser.Sound.BaseSound | null = null;
+  private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
     super({ key: 'SkyGameScene' });
@@ -83,6 +114,13 @@ class SkyGameScene extends Phaser.Scene {
     // Initialize speed from registry for continuous rounds
     const roundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
     this.currentSpeed = roundData.baseSpeed;
+
+    this.currentLevel = 1;
+    this.hearts = 0;
+    this.lastVictoryHandledSeq = -999;
+    this.inVictorySequence = false;
+    this.drownFailTimer = null;
+    this.failBubbleLayer = null;
 
     // Set scene background color to sky blue
     this.cameras.main.setBackgroundColor(0x87ceeb);
@@ -150,6 +188,7 @@ class SkyGameScene extends Phaser.Scene {
     });
 
     this.victorySound = this.sound.add('victory', { volume: 0.8 });
+    this.skyArrowChallenge = createSkyArrowChallengeState();
 
     // Set up physics
     this.physics.world.setBounds(0, 0, 800, 600);
@@ -169,12 +208,34 @@ class SkyGameScene extends Phaser.Scene {
     });
   }
 
+  private cancelPendingDrownRestart(): void {
+    if (this.drownFailTimer) {
+      this.time.removeEvent(this.drownFailTimer);
+      this.drownFailTimer = null;
+    }
+    if (this.failBubbleLayer) {
+      this.failBubbleLayer.destroy(true);
+      this.failBubbleLayer = null;
+    }
+    this.drownRestartScheduled = false;
+  }
+
+  /**
+   * Spawns exactly one falling NPC. Any previous sprite is destroyed first.
+   * The next drop only runs after the prior rescue finishes (victory audio → nextLevel),
+   * so there is never a second character falling while the Saviour is carrying one.
+   */
   createNPC() {
+    destroyTaggedRescueNpcs(this, this.player);
     if (this.npc) {
       this.npc.destroy();
+      this.npc = null;
     }
+    this.cancelPendingDrownRestart();
 
-    const npcData = this.npcList[this.currentLevel - 1];
+    const npcData = this.npcList[Math.min(MAX_LEVEL, this.currentLevel) - 1];
+    const lvl = Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
+    const npcTexKey = `sky_npc_lv_${lvl}`;
 
     // Get round data to vary spawn position
     const roundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
@@ -202,6 +263,7 @@ class SkyGameScene extends Phaser.Scene {
     this.baseVelocity = { x: vx, y: vy };
     this.npc.setCollideWorldBounds(false); // Allow it to fall off screen
     this.npc.setDepth(10);
+    this.npc.setData(SKY_RESCUE_NPC_DATA_KEY, true);
 
     // Create NPC graphics based on level
     const npcGraphics = this.make.graphics({ x: 0, y: 0 }, false);
@@ -235,10 +297,10 @@ class SkyGameScene extends Phaser.Scene {
       npcGraphics.fillCircle(15, 8, 5);
     }
     
-    npcGraphics.generateTexture('npc', 30, 30);
+    npcGraphics.generateTexture(npcTexKey, 30, 30);
     npcGraphics.destroy();
 
-    this.npc.setTexture('npc');
+    this.npc.setTexture(npcTexKey);
 
     this.helpProgress = 0;
     this.levelComplete = false;
@@ -247,7 +309,18 @@ class SkyGameScene extends Phaser.Scene {
   }
 
   update() {
-    if (!this.player || this.isPaused || (this.levelComplete && !this.isCarrying)) return;
+    if (!this.player) return;
+
+    const arrowsLocked = tickSkyArrowChallenge(
+      this.time.now,
+      this.isPaused,
+      this.skyArrowChallenge,
+      this.cursors,
+      skyArrowDisabledMessageIndexForLevel(this.currentLevel),
+      (message) => this.onArrowDisabledNudge?.(message),
+    );
+
+    if (this.isPaused || (this.levelComplete && !this.isCarrying)) return;
 
     // Player movement
     const speed = 300;
@@ -265,32 +338,43 @@ class SkyGameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.cursors?.left.isDown) {
-      this.player.setVelocityX(-speed);
-    } else if (this.cursors?.right.isDown) {
-      this.player.setVelocityX(speed);
-    }
+    if (!arrowsLocked) {
+      if (this.cursors?.left.isDown) {
+        this.player.setVelocityX(-speed);
+      } else if (this.cursors?.right.isDown) {
+        this.player.setVelocityX(speed);
+      }
 
-    if (this.cursors?.up.isDown) {
-      this.player.setVelocityY(-speed);
-    } else if (this.cursors?.down.isDown) {
-      this.player.setVelocityY(speed);
+      if (this.cursors?.up.isDown) {
+        this.player.setVelocityY(-speed);
+      } else if (this.cursors?.down.isDown) {
+        this.player.setVelocityY(speed);
+      }
     }
 
     if (this.npc) {
-      // NPC is falling at the initial angle
       this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
-      
+
       // Check if NPC touches water (below 450 pixels)
-      if (this.npc.y > 450 && !this.npcHasBeenTouched) {
-        // Character drowned - trigger "Help me" message
-        if (this.onHelpMeMessage) {
-          this.onHelpMeMessage();
+      if (
+        this.npc.y > 450 &&
+        !this.npcHasBeenTouched &&
+        !this.drownRestartScheduled &&
+        !this.inVictorySequence
+      ) {
+        this.drownRestartScheduled = true;
+        if (!this.failBubbleLayer) {
+          this.failBubbleLayer = mountSkyFailBubbleMessages(this, SKY_BASE_FAIL_MESSAGES);
         }
-        // Level fails - restart
-        this.time.delayedCall(3000, () => {
-          this.levelComplete = true;
-          this.scene.restart();
+        this.drownFailTimer = this.time.delayedCall(SKY_FAIL_FEEDBACK_MS, () => {
+          this.drownFailTimer = null;
+          if (this.failBubbleLayer) {
+            this.failBubbleLayer.destroy(true);
+            this.failBubbleLayer = null;
+          }
+          this.levelComplete = false;
+          this.drownRestartScheduled = false;
+          this.createNPC();
         });
       }
 
@@ -304,13 +388,17 @@ class SkyGameScene extends Phaser.Scene {
         );
 
         if (distance < this.helpRadius && !this.npcHasBeenTouched) {
-          // Player caught the falling character!
+          // Player caught the falling character — cancel fail timer if NPC crossed water line earlier.
+          this.cancelPendingDrownRestart();
           this.npcHasBeenTouched = true;
           this.isCarrying = true;
-          
+
           if (this.onHeartEarned) {
-            this.hearts += 1;
-            this.onHeartEarned(this.hearts, this.currentLevel);
+            this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+            this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+          }
+          if (this.hearts === 1) {
+            notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
           }
 
           // Emit celebrating particles
@@ -324,51 +412,51 @@ class SkyGameScene extends Phaser.Scene {
     }
   }
 
-  onHelpMeMessage: (() => void) | null = null;
-
   nextLevel() {
+    if (this.currentLevel >= MAX_LEVEL) return;
     this.currentLevel += 1;
+    // Carried NPC is destroyed here and replaced by the next single drop (no overlap).
     this.createNPC();
   }
 
   completeLevel() {
+    this.cancelPendingDrownRestart();
     this.levelComplete = true;
+    this.inVictorySequence = true;
+    const seq = ++this.victoryAdvanceSeq;
 
     const continueToNextCharacter = () => {
-      if (this.currentLevel < 5) {
+      if (seq !== this.victoryAdvanceSeq) return;
+      if (this.lastVictoryHandledSeq === seq) return;
+      this.lastVictoryHandledSeq = seq;
+      if (this.currentLevel < MAX_LEVEL) {
         this.nextLevel();
-      } else {
-        const currentRoundData = this.registry.get('skyGameRound') || { roundNumber: 1, baseSpeed: 80 };
-
-        if (currentRoundData.roundNumber === 1) {
-          if (this.onGameComplete) {
-            this.onGameComplete();
-          }
-        } else {
-          const newRoundData = {
-            roundNumber: currentRoundData.roundNumber + 1,
-            baseSpeed: currentRoundData.baseSpeed + 2,
-          };
-          this.registry.set('skyGameRound', newRoundData);
-          this.scene.restart();
-        }
+      } else if (this.onGameComplete) {
+        this.onGameComplete();
       }
+      this.inVictorySequence = false;
     };
 
     if (!this.victorySound) {
       this.victorySound = this.sound.add('victory', { volume: 0.8 });
     }
 
+    // Drop prior listeners first: stop() can emit `complete` on some builds if listeners still attached.
+    this.victorySound.off(Phaser.Sound.Events.COMPLETE);
     if (this.victorySound.isPlaying) {
       this.victorySound.stop();
     }
 
     this.victorySound.once(Phaser.Sound.Events.COMPLETE, () => {
+      if (seq !== this.victoryAdvanceSeq) return;
       continueToNextCharacter();
     });
 
+    // Avoid stacking `unlocked` handlers — each rescue added another; all fired at once → multiple play/complete → extra NPCs.
+    this.sound.off(Phaser.Sound.Events.UNLOCKED);
     if (this.sound.locked) {
       this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
+        if (seq !== this.victoryAdvanceSeq) return;
         this.victorySound?.play();
       });
     } else {
@@ -381,15 +469,15 @@ class SkyGameScene extends Phaser.Scene {
   }
 
   getHearts(): number {
-    return this.hearts;
+    return Math.min(MAX_LEVEL, this.hearts);
   }
 
   getCurrentLevel(): number {
-    return this.currentLevel;
+    return Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
   }
 
   getNPCInfo() {
-    return this.npcList[this.currentLevel - 1];
+    return this.npcList[Math.min(MAX_LEVEL, this.currentLevel) - 1];
   }
 
   togglePause() {
@@ -428,9 +516,12 @@ export default function SkyGame() {
   const [currentNPC, setCurrentNPC] = useState<string>('');
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
-  const [showHelpMessage, setShowHelpMessage] = useState(false);
+  /** Arrow-lockout nudges use the same on-screen duration as fail-feedback bubbles (see SKY_FAIL_FEEDBACK_MS). */
+  const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const sceneRef = useRef<SkyGameScene | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const levelMessages: Record<number, string> = {
     1: 'You saved my life. Thank you so much!',
@@ -440,25 +531,32 @@ export default function SkyGame() {
     5: "I can't believe you were able to keep me from drowning! Drinks on me!",
   };
 
-  // Hide speech bubble after 10 seconds
   useEffect(() => {
-    if (showSpeechBubble) {
-      const timer = setTimeout(() => {
-        setShowSpeechBubble(false);
-      }, 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [showSpeechBubble]);
+    if (!showSpeechBubble) return;
+    const ms = speechBubbleIsArrowLockout ? SKY_FAIL_FEEDBACK_MS : SPEECH_BUBBLE_RESCUE_MS;
+    const timer = window.setTimeout(() => {
+      setShowSpeechBubble(false);
+      setSpeechBubbleIsArrowLockout(false);
+    }, ms);
+    return () => window.clearTimeout(timer);
+  }, [showSpeechBubble, speechBubbleIsArrowLockout]);
 
-  // Hide help message after 2 seconds
   useEffect(() => {
-    if (showHelpMessage) {
-      const timer = setTimeout(() => {
-        setShowHelpMessage(false);
-      }, 2000);
-      return () => clearTimeout(timer);
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-hamburger-menu="true"]')) {
+        return;
+      }
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+
+    if (isMenuOpen) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
     }
-  }, [showHelpMessage]);
+  }, [isMenuOpen]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -489,13 +587,10 @@ export default function SkyGame() {
         // Set up callbacks
         scene.onHeartEarned = (newHearts: number, completedLevel: number) => {
           setHearts(newHearts);
+          setSpeechBubbleIsArrowLockout(false);
           // Show speech bubble with the message from the completed level
           setSpeechMessage(levelMessages[completedLevel] || '');
           setShowSpeechBubble(true);
-        };
-
-        scene.onHelpMeMessage = () => {
-          setShowHelpMessage(true);
         };
 
         scene.onGameComplete = () => {
@@ -504,6 +599,12 @@ export default function SkyGame() {
 
         scene.onPauseStateChange = (paused: boolean) => {
           setIsPaused(paused);
+        };
+
+        scene.onArrowDisabledNudge = (message: string) => {
+          setSpeechBubbleIsArrowLockout(true);
+          setSpeechMessage(message);
+          setShowSpeechBubble(true);
         };
 
         // Update loop for progress bar
@@ -530,9 +631,9 @@ export default function SkyGame() {
   }, []);
 
   return (
-    <main className="w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
-      {/* Header with stats */}
-      <div className="bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
+    <main className="relative w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
+      {/* Header with stats — above Phaser canvas stacking */}
+      <div className="relative z-[10050] isolate overflow-visible bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex gap-8">
             {/* Hearts Counter */}
@@ -563,18 +664,86 @@ export default function SkyGame() {
             </Card>
           </div>
 
-          {/* Back to Home */}
-          <Link
-            href="/games/sky"
-            className="px-4 py-2 bg-white/20 hover:bg-white/30 border border-white/30 rounded text-white font-semibold transition"
-          >
-            Back
-          </Link>
+          <div className="relative" ref={menuRef} data-hamburger-menu="true">
+            <button
+              type="button"
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="px-4 py-2 bg-white/20 hover:bg-white/30 border border-white/30 rounded text-white font-semibold transition"
+              aria-label="Game menu"
+            >
+              ☰
+            </button>
+            {isMenuOpen && (
+              <div
+                data-hamburger-menu="true"
+                className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-[10060] max-h-[min(70vh,calc(100dvh-6rem))] overflow-y-scroll overscroll-contain pointer-events-auto touch-pan-y [scrollbar-gutter:stable]"
+                onPointerDownCapture={(e) => e.stopPropagation()}
+                onWheelCapture={(e) => e.stopPropagation()}
+              >
+                <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
+                  Sky Games
+                </div>
+                <Link
+                  href="/games/sky/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🌤️ Sky Challenge (Current)
+                </Link>
+                <Link
+                  href="/games/sky-city/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏙️ Sky City Rescue
+                </Link>
+                <Link
+                  href="/games/sky-islands/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏝️ Sky Islands
+                </Link>
+                <Link
+                  href="/games/sky-fortress/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏰 Sky Fortress
+                </Link>
+
+                <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
+                  Other Games
+                </div>
+                <Link
+                  href="/games/sea"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🌊 Savior of the Sea
+                </Link>
+                <Link
+                  href="/games/land"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🌲 Savior of the Land
+                </Link>
+                <Link
+                  href="/games/city"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏢 Saviour of the City
+                </Link>
+
+                <Link
+                  href="/"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
+                >
+                  🏠 Back to Home
+                </Link>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Game Container */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden relative">
+      <div className="relative z-0 flex-1 flex items-center justify-center overflow-hidden">
         <div ref={gameRef} className="shadow-2xl rounded-lg overflow-hidden" />
         
         {/* Speech Bubble */}
@@ -585,19 +754,6 @@ export default function SkyGame() {
               <div className="absolute -right-4 top-8 w-0 h-0 border-l-8 border-t-4 border-b-4 border-l-white border-t-transparent border-b-transparent"></div>
               <p className="text-gray-800 text-lg font-semibold leading-relaxed">
                 {speechMessage}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Help Me Message */}
-        {showHelpMessage && (
-          <div className="absolute top-1/3 left-16 animate-in fade-in slide-in-from-left-4 duration-500">
-            <div className="bg-red-100 rounded-lg shadow-2xl p-6 max-w-xs relative border-2 border-red-400">
-              {/* Bubble pointer */}
-              <div className="absolute -left-4 top-8 w-0 h-0 border-r-8 border-t-4 border-b-4 border-r-red-100 border-t-transparent border-b-transparent"></div>
-              <p className="text-red-800 text-lg font-bold leading-relaxed animate-pulse">
-                Help me! Help me!
               </p>
             </div>
           </div>
@@ -615,6 +771,7 @@ export default function SkyGame() {
             </div>
           </div>
         )}
+
       </div>
 
       {/* Help Progress Bar and Info */}
@@ -622,44 +779,35 @@ export default function SkyGame() {
         <div className="max-w-7xl mx-auto">
           <p className="text-white/70 text-sm mb-2">Stay Alert!</p>
           <p className="text-white/50 text-sm">
-            Catch the falling characters before they hit the water! Use arrow keys to move. Carry them upward to safety.
+            Catch the falling characters before they hit the water. Use arrow keys to move — space bar for pause — you earn
+            one heart per rescue. When you&apos;ve saved everyone, the completion screen lets you continue to the next sky
+            game or go home.
           </p>
         </div>
       </div>
 
-      {/* Game Complete Screen */}
       {gameState === 'complete' && (
-        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-          <Card className="bg-gradient-to-b from-yellow-100 to-yellow-50 p-8 max-w-md text-center shadow-2xl">
-            <div className="text-6xl mb-4">⭐</div>
-            <h2 className="text-3xl font-bold text-yellow-900 mb-2">
-              Amazing!
-            </h2>
-            <p className="text-lg text-yellow-700 mb-4">
-              You've completed the Sky Challenge!
-            </p>
-            <p className="text-2xl font-bold text-yellow-600 mb-6">
-              Total Hearts Earned: {hearts}/5
-            </p>
-            <p className="text-lg text-yellow-700 mb-6">
-              Continue your adventure to the Sky Islands...
-            </p>
-            <div className="flex gap-4">
+        <SkyGameCompletionCard
+          completedPhrase="the Sky Challenge!"
+          hearts={hearts}
+          tagline="Continue your adventure to the Sky Islands..."
+          actions={
+            <>
               <Link
                 href="/games/sky-islands/play"
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold rounded-lg hover:from-purple-400 hover:to-pink-400 transition"
+                className="flex-1 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-6 py-3 text-center font-semibold text-white transition hover:from-purple-400 hover:to-pink-400"
               >
                 🏝️ Sky Islands
               </Link>
               <Link
                 href="/"
-                className="flex-1 px-6 py-3 bg-gray-400 text-white font-semibold rounded-lg hover:bg-gray-500 transition"
+                className="flex-1 rounded-lg bg-gray-400 px-6 py-3 text-center font-semibold text-white transition hover:bg-gray-500"
               >
                 Home
               </Link>
-            </div>
-          </Card>
-        </div>
+            </>
+          }
+        />
       )}
     </main>
   );

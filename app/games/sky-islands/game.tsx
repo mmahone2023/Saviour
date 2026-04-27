@@ -2,8 +2,27 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import * as Phaser from 'phaser';
 import { Card } from '@/components/ui/card';
+import { SkyGameCompletionCard } from '@/components/sky-game-completion-card';
+import {
+  createSkyArrowChallengeState,
+  notifySkyArrowFirstRescue,
+  skyArrowDisabledMessageIndexForLevel,
+  tickSkyArrowChallenge,
+  type SkyArrowChallengeState,
+} from '@/app/games/sky-arrow-challenge';
+import { destroyTaggedRescueNpcs, SKY_RESCUE_NPC_DATA_KEY } from '@/app/games/sky-rescue-single-npc';
+import {
+  mountSkyFailBubbleMessages,
+  SKY_FAIL_FEEDBACK_MS,
+  SKY_ISLANDS_FAIL_MESSAGES,
+} from '@/app/games/sky-rescue-fail-bubbles';
+
+const SPEECH_BUBBLE_RESCUE_MS = 10000;
+
+const MAX_LEVEL = 5;
 
 // Sky Islands Game Scene
 class SkyIslandsGameScene extends Phaser.Scene {
@@ -18,6 +37,13 @@ class SkyIslandsGameScene extends Phaser.Scene {
   private isCarrying: boolean = false;
   private baseVelocity: { x: number; y: number } = { x: 0, y: 0 };
   private npcHasBeenTouched: boolean = false;
+  /** Avoids stacking multiple scene.restart timers while the NPC stays past the fail line. */
+  private drownRestartScheduled: boolean = false;
+  private drownFailTimer: Phaser.Time.TimerEvent | null = null;
+  private inVictorySequence: boolean = false;
+  private failBubbleLayer: Phaser.GameObjects.Container | null = null;
+  private victoryAdvanceSeq: number = 0;
+  private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 80;
   private isPaused: boolean = false;
   private pauseText: Phaser.GameObjects.Text | null = null;
@@ -42,9 +68,11 @@ class SkyIslandsGameScene extends Phaser.Scene {
   ];
 
   onHeartEarned: ((hearts: number, level: number) => void) | null = null;
-  onGameComplete: ((nextGameUrl?: string) => void) | null = null;
+  onGameComplete: (() => void) | null = null;
   onPauseStateChange: ((isPaused: boolean) => void) | null = null;
+  onArrowDisabledNudge: ((message: string) => void) | null = null;
   private victorySound: Phaser.Sound.BaseSound | null = null;
+  private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
     super('SkyIslandsGameScene');
@@ -59,6 +87,13 @@ class SkyIslandsGameScene extends Phaser.Scene {
     // Initialize speed from registry
     const roundData = this.registry.get('skyIslandsRound') || { roundNumber: 1, baseSpeed: 80 };
     this.currentSpeed = roundData.baseSpeed;
+
+    this.currentLevel = 1;
+    this.hearts = 0;
+    this.lastVictoryHandledSeq = -999;
+    this.inVictorySequence = false;
+    this.drownFailTimer = null;
+    this.failBubbleLayer = null;
 
     // Set camera background
     this.cameras.main.setBackgroundColor(0x87ceeb);
@@ -115,6 +150,8 @@ class SkyIslandsGameScene extends Phaser.Scene {
     this.pauseText.setDepth(100);
     this.pauseText.setVisible(false);
 
+    this.skyArrowChallenge = createSkyArrowChallengeState();
+
     // Create first NPC
     this.createNPC();
   }
@@ -147,14 +184,31 @@ class SkyIslandsGameScene extends Phaser.Scene {
     });
   }
 
+  private cancelPendingDrownRestart(): void {
+    if (this.drownFailTimer) {
+      this.time.removeEvent(this.drownFailTimer);
+      this.drownFailTimer = null;
+    }
+    if (this.failBubbleLayer) {
+      this.failBubbleLayer.destroy(true);
+      this.failBubbleLayer = null;
+    }
+    this.drownRestartScheduled = false;
+  }
+
   createNPC() {
+    destroyTaggedRescueNpcs(this, this.player);
     if (this.npc) {
       this.npc.destroy();
+      this.npc = null;
     }
+    this.cancelPendingDrownRestart();
 
     const roundData = this.registry.get('skyIslandsRound') || { roundNumber: 1, baseSpeed: 80 };
     const xPositions = [150, 400, 650, 250, 550, 100, 700];
     const spawnX = xPositions[(roundData.roundNumber - 1) % xPositions.length];
+    const lvl = Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
+    const npcTexKey = `npcIslands_lv_${lvl}`;
 
     // Create NPC texture first
     const npcGraphicsIslands = this.make.graphics({ x: 0, y: 0 }, false);
@@ -162,10 +216,10 @@ class SkyIslandsGameScene extends Phaser.Scene {
     npcGraphicsIslands.fillCircle(15, 15, 8);
     npcGraphicsIslands.fillStyle(0xff7f50, 1);
     npcGraphicsIslands.fillCircle(15, 8, 5);
-    npcGraphicsIslands.generateTexture('npcIslands', 30, 30);
+    npcGraphicsIslands.generateTexture(npcTexKey, 30, 30);
     npcGraphicsIslands.destroy();
 
-    this.npc = this.physics.add.sprite(spawnX, 50, 'npcIslands');
+    this.npc = this.physics.add.sprite(spawnX, 50, npcTexKey);
 
     // Calculate falling velocity (almost vertical)
     const angle = 5;
@@ -180,6 +234,7 @@ class SkyIslandsGameScene extends Phaser.Scene {
     this.baseVelocity = { x: vx, y: vy };
     this.npc.setCollideWorldBounds(false);
     this.npc.setDepth(10);
+    this.npc.setData(SKY_RESCUE_NPC_DATA_KEY, true);
 
     this.levelComplete = false;
     this.isCarrying = false;
@@ -193,7 +248,18 @@ class SkyIslandsGameScene extends Phaser.Scene {
   }
 
   update() {
-    if (!this.player || this.isPaused || (this.levelComplete && !this.isCarrying)) return;
+    if (!this.player) return;
+
+    const arrowsLocked = tickSkyArrowChallenge(
+      this.time.now,
+      this.isPaused,
+      this.skyArrowChallenge,
+      this.cursors,
+      skyArrowDisabledMessageIndexForLevel(this.currentLevel),
+      (message) => this.onArrowDisabledNudge?.(message),
+    );
+
+    if (this.isPaused || (this.levelComplete && !this.isCarrying)) return;
 
     const speed = 300;
     this.player.setVelocity(0);
@@ -210,26 +276,43 @@ class SkyIslandsGameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.cursors?.left.isDown) {
-      this.player.setVelocityX(-speed);
-    } else if (this.cursors?.right.isDown) {
-      this.player.setVelocityX(speed);
-    }
+    if (!arrowsLocked) {
+      if (this.cursors?.left.isDown) {
+        this.player.setVelocityX(-speed);
+      } else if (this.cursors?.right.isDown) {
+        this.player.setVelocityX(speed);
+      }
 
-    if (this.cursors?.up.isDown) {
-      this.player.setVelocityY(-speed);
-    } else if (this.cursors?.down.isDown) {
-      this.player.setVelocityY(speed);
+      if (this.cursors?.up.isDown) {
+        this.player.setVelocityY(-speed);
+      } else if (this.cursors?.down.isDown) {
+        this.player.setVelocityY(speed);
+      }
     }
 
     if (this.npc) {
       this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
 
       // Check if NPC falls beyond screen
-      if (this.npc.y > 600 && !this.npcHasBeenTouched) {
-        this.time.delayedCall(3000, () => {
-          this.levelComplete = true;
-          this.scene.restart();
+      if (
+        this.npc.y > 600 &&
+        !this.npcHasBeenTouched &&
+        !this.drownRestartScheduled &&
+        !this.inVictorySequence
+      ) {
+        this.drownRestartScheduled = true;
+        if (!this.failBubbleLayer) {
+          this.failBubbleLayer = mountSkyFailBubbleMessages(this, SKY_ISLANDS_FAIL_MESSAGES);
+        }
+        this.drownFailTimer = this.time.delayedCall(SKY_FAIL_FEEDBACK_MS, () => {
+          this.drownFailTimer = null;
+          if (this.failBubbleLayer) {
+            this.failBubbleLayer.destroy(true);
+            this.failBubbleLayer = null;
+          }
+          this.levelComplete = false;
+          this.drownRestartScheduled = false;
+          this.createNPC();
         });
       }
 
@@ -243,12 +326,16 @@ class SkyIslandsGameScene extends Phaser.Scene {
         );
 
         if (distance < this.helpRadius && !this.npcHasBeenTouched) {
+          this.cancelPendingDrownRestart();
           this.npcHasBeenTouched = true;
           this.isCarrying = true;
 
           if (this.onHeartEarned) {
-            this.hearts += 1;
-            this.onHeartEarned(this.hearts, this.currentLevel);
+            this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+            this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+          }
+          if (this.hearts === 1) {
+            notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
           }
 
           if (this.particles) {
@@ -262,7 +349,10 @@ class SkyIslandsGameScene extends Phaser.Scene {
   }
 
   completeLevel() {
+    this.cancelPendingDrownRestart();
     this.levelComplete = true;
+    this.inVictorySequence = true;
+    const seq = ++this.victoryAdvanceSeq;
 
     if (this.npc) {
       this.tweens.add({
@@ -275,29 +365,15 @@ class SkyIslandsGameScene extends Phaser.Scene {
     }
 
     const goToNextStep = () => {
-      if (this.currentLevel < 5) {
+      if (seq !== this.victoryAdvanceSeq) return;
+      if (this.lastVictoryHandledSeq === seq) return;
+      this.lastVictoryHandledSeq = seq;
+      if (this.currentLevel < MAX_LEVEL) {
         this.nextLevel();
-      } else {
-        const currentRoundData =
-          this.registry.get('skyIslandsRound') || {
-            roundNumber: 1,
-            baseSpeed: 80,
-          };
-
-        if (currentRoundData.roundNumber === 1) {
-          if (this.onGameComplete) {
-            this.onGameComplete('/games/sky-fortress/play');
-          }
-        } else {
-          const newRoundData = {
-            roundNumber: currentRoundData.roundNumber + 1,
-            baseSpeed: currentRoundData.baseSpeed + 2,
-          };
-
-          this.registry.set('skyIslandsRound', newRoundData);
-          this.scene.restart();
-        }
+      } else if (this.onGameComplete) {
+        this.onGameComplete();
       }
+      this.inVictorySequence = false;
     };
 
     try {
@@ -305,19 +381,22 @@ class SkyIslandsGameScene extends Phaser.Scene {
         this.victorySound = this.sound.add('victory', { volume: 0.8 });
       }
 
-      // Stop any currently playing instance and replay from the start.
+      this.victorySound.off(Phaser.Sound.Events.COMPLETE);
       if (this.victorySound.isPlaying) {
         this.victorySound.stop();
       }
 
       this.victorySound.once(Phaser.Sound.Events.COMPLETE, () => {
+        if (seq !== this.victoryAdvanceSeq) return;
         goToNextStep();
       });
 
       const playVictory = () => {
+        if (seq !== this.victoryAdvanceSeq) return;
         this.victorySound?.play();
       };
 
+      this.sound.off(Phaser.Sound.Events.UNLOCKED);
       if (this.sound.locked) {
         this.sound.once(Phaser.Sound.Events.UNLOCKED, playVictory);
       } else {
@@ -330,6 +409,7 @@ class SkyIslandsGameScene extends Phaser.Scene {
   }
 
   nextLevel() {
+    if (this.currentLevel >= MAX_LEVEL) return;
     this.currentLevel += 1;
     this.createNPC();
   }
@@ -359,11 +439,11 @@ class SkyIslandsGameScene extends Phaser.Scene {
   }
   
   getHearts(): number {
-    return this.hearts;
+    return Math.min(MAX_LEVEL, this.hearts);
   }
 
   getCurrentLevel(): number {
-    return this.currentLevel;
+    return Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
   }
 
   getIsPaused(): boolean {
@@ -381,6 +461,7 @@ export default function SkyIslandsGame() {
   const [gameState, setGameState] = useState<'playing' | 'complete'>('playing');
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
+  const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const sceneRef = useRef<SkyIslandsGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -394,24 +475,29 @@ export default function SkyIslandsGame() {
   };
 
   useEffect(() => {
-    if (showSpeechBubble) {
-      const timer = setTimeout(() => {
-        setShowSpeechBubble(false);
-      }, 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [showSpeechBubble]);
+    if (!showSpeechBubble) return;
+    const ms = speechBubbleIsArrowLockout ? SKY_FAIL_FEEDBACK_MS : SPEECH_BUBBLE_RESCUE_MS;
+    const timer = window.setTimeout(() => {
+      setShowSpeechBubble(false);
+      setSpeechBubbleIsArrowLockout(false);
+    }, ms);
+    return () => window.clearTimeout(timer);
+  }, [showSpeechBubble, speechBubbleIsArrowLockout]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-hamburger-menu="true"]')) {
+        return;
+      }
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
         setIsMenuOpen(false);
       }
     };
 
     if (isMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [isMenuOpen]);
 
@@ -446,16 +532,19 @@ export default function SkyIslandsGame() {
 
         scene.onHeartEarned = (newHearts: number, completedLevel: number) => {
           setHearts(newHearts);
+          setSpeechBubbleIsArrowLockout(false);
           setSpeechMessage(levelMessages[completedLevel] || '');
           setShowSpeechBubble(true);
         };
 
-        scene.onGameComplete = (nextGameUrl?: string) => {
-          if (nextGameUrl) {
-            router.push(nextGameUrl);
-          } else {
-            setGameState('complete');
-          }
+        scene.onGameComplete = () => {
+          setGameState('complete');
+        };
+
+        scene.onArrowDisabledNudge = (message: string) => {
+          setSpeechBubbleIsArrowLockout(true);
+          setSpeechMessage(message);
+          setShowSpeechBubble(true);
         };
 
         updateInterval = setInterval(() => {
@@ -476,8 +565,8 @@ export default function SkyIslandsGame() {
   }, []);
 
   return (
-    <main className="w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
-      <div className="bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
+    <main className="relative w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
+      <div className="relative z-[10050] isolate overflow-visible bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex gap-8">
             <Card className="bg-white/10 border-white/20 px-4 py-2">
@@ -498,8 +587,9 @@ export default function SkyIslandsGame() {
             </Card>
           </div>
 
-          <div className="relative" ref={menuRef}>
+          <div className="relative" ref={menuRef} data-hamburger-menu="true">
             <button
+              type="button"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
               className="px-4 py-2 bg-white/20 hover:bg-white/30 border border-white/30 rounded text-white font-semibold transition"
               aria-label="Game menu"
@@ -507,88 +597,78 @@ export default function SkyIslandsGame() {
               ☰
             </button>
             {isMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-50 max-h-96 overflow-y-scroll overscroll-contain">
+              <div
+                data-hamburger-menu="true"
+                className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-[10060] max-h-[min(70vh,calc(100dvh-6rem))] overflow-y-scroll overscroll-contain pointer-events-auto touch-pan-y [scrollbar-gutter:stable]"
+                onPointerDownCapture={(e) => e.stopPropagation()}
+                onWheelCapture={(e) => e.stopPropagation()}
+              >
                 {/* Sky Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Sky Games
                 </div>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-city/play');
-                  }}
+                <Link
+                  href="/games/sky/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🌤️ Sky Challenge
+                </Link>
+                <Link
+                  href="/games/sky-city/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏙️ Sky City Rescue
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-islands/play');
-                  }}
+                </Link>
+                <Link
+                  href="/games/sky-islands/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏝️ Sky Islands (Current)
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-fortress/play');
-                  }}
+                </Link>
+                <Link
+                  href="/games/sky-fortress/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏰 Sky Fortress
-                </button>
+                </Link>
                 
                 {/* Other Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Other Games
                 </div>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sea');
-                  }}
+                <Link
+                  href="/games/sea"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🌊 Savior of the Sea
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/land');
-                  }}
+                </Link>
+                <Link
+                  href="/games/land"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🌲 Savior of the Land
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/city');
-                  }}
+                </Link>
+                <Link
+                  href="/games/city"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏢 Saviour of the City
-                </button>
+                </Link>
                 
                 {/* Home Link */}
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/');
-                  }}
+                <Link
+                  href="/"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
                   🏠 Back to Home
-                </button>
+                </Link>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 flex items-center justify-center overflow-hidden relative">
+      <div className="relative z-0 flex-1 flex items-center justify-center overflow-hidden">
         <div ref={gameRef} className="shadow-2xl rounded-lg overflow-hidden" />
 
         {showSpeechBubble && (
@@ -601,46 +681,42 @@ export default function SkyIslandsGame() {
             </div>
           </div>
         )}
+
       </div>
 
       <div className="bg-black/40 backdrop-blur-sm border-t border-white/20 p-4">
         <div className="max-w-7xl mx-auto">
           <p className="text-white/70 text-sm mb-2">Save Them All!</p>
           <p className="text-white/50 text-sm">
-            Catch the falling island dwellers! Use arrow keys to move. Guide them to safety.
+            Catch the falling island dwellers with the arrow keys — space bar for pause — one heart per rescue. Earn all five
+            to see the completion celebration; you can continue to Sky Fortress from there when offered.
           </p>
         </div>
       </div>
 
       {gameState === 'complete' && (
-        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-          <Card className="bg-gradient-to-b from-yellow-100 to-yellow-50 p-8 max-w-md text-center shadow-2xl">
-            <div className="text-6xl mb-4">🏝️</div>
-            <h2 className="text-3xl font-bold text-yellow-900 mb-2">
-              Islands Saved!
-            </h2>
-            <p className="text-lg text-yellow-700 mb-4">
-              You've completed the Sky Islands!
-            </p>
-            <p className="text-2xl font-bold text-yellow-600 mb-6">
-              Total Hearts: {hearts}/5
-            </p>
-            <div className="flex gap-4">
+        <SkyGameCompletionCard
+          completedPhrase="the Sky Islands!"
+          hearts={hearts}
+          tagline="Head to the fortress when you&apos;re ready, or replay the islands."
+          actions={
+            <>
+              <Link
+                href="/games/sky-fortress/play"
+                className="flex-1 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-6 py-3 text-center font-semibold text-white transition hover:from-purple-400 hover:to-pink-400"
+              >
+                Continue to Sky Fortress
+              </Link>
               <button
+                type="button"
                 onClick={() => router.push('/games/sky-islands/play')}
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-sky-400 to-blue-500 text-white font-semibold rounded-lg hover:from-sky-300 hover:to-blue-400 transition cursor-pointer"
+                className="flex-1 cursor-pointer rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50"
               >
-                Play Again
+                Play again
               </button>
-              <button
-                onClick={() => router.push('/')}
-                className="flex-1 px-6 py-3 bg-gray-400 text-white font-semibold rounded-lg hover:bg-gray-500 transition cursor-pointer"
-              >
-                Home
-              </button>
-            </div>
-          </Card>
-        </div>
+            </>
+          }
+        />
       )}
     </main>
   );

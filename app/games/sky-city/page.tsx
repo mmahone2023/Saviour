@@ -78,7 +78,8 @@ export default function SkyCityPage() {
         </h1>
 
         <p className="text-sky-100/90 max-w-md mb-8 text-lg">
-          People are falling from buildings in the sky city! Fly fast and catch them before they fall too far.
+          People are falling from buildings in the sky city — catch them fast. Finish all five rescues (five hearts) to see
+          the congratulation popup and completion screen with options to continue to the next sky game.
         </p>
 
         <div className="flex gap-4">

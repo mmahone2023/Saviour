@@ -3,7 +3,26 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Phaser from 'phaser';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Card } from '@/components/ui/card';
+import { SkyGameCompletionCard } from '@/components/sky-game-completion-card';
+import {
+  createSkyArrowChallengeState,
+  notifySkyArrowFirstRescue,
+  skyArrowDisabledMessageIndexForLevel,
+  tickSkyArrowChallenge,
+  type SkyArrowChallengeState,
+} from '@/app/games/sky-arrow-challenge';
+import { destroyTaggedRescueNpcs, SKY_RESCUE_NPC_DATA_KEY } from '@/app/games/sky-rescue-single-npc';
+import {
+  mountSkyFailBubbleMessages,
+  SKY_CITY_FAIL_MESSAGES,
+  SKY_FAIL_FEEDBACK_MS,
+} from '@/app/games/sky-rescue-fail-bubbles';
+
+const SPEECH_BUBBLE_RESCUE_MS = 10000;
+
+const MAX_LEVEL = 5;
 
 // Sky City Game Scene
 class SkyCityGameScene extends Phaser.Scene {
@@ -18,8 +37,14 @@ class SkyCityGameScene extends Phaser.Scene {
   private isCarrying: boolean = false;
   private baseVelocity: { x: number; y: number } = { x: 0, y: 0 };
   private npcHasBeenTouched: boolean = false;
+  /** Avoids stacking multiple scene.restart timers while the NPC stays past the fail line. */
+  private drownRestartScheduled: boolean = false;
+  private drownFailTimer: Phaser.Time.TimerEvent | null = null;
+  private inVictorySequence: boolean = false;
+  private failBubbleLayer: Phaser.GameObjects.Container | null = null;
+  private victoryAdvanceSeq: number = 0;
+  private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 60;
-  private contactTime: number = 0;
   private isPaused: boolean = false;
   
   private levelMessages: Record<number, string> = {
@@ -44,7 +69,9 @@ class SkyCityGameScene extends Phaser.Scene {
   onHeartEarned: ((hearts: number, level: number) => void) | null = null;
   onGameComplete: (() => void) | null = null;
   onPauseStateChange: ((isPaused: boolean) => void) | null = null;
+  onArrowDisabledNudge: ((message: string) => void) | null = null;
   private victorySound: Phaser.Sound.BaseSound | null = null;
+  private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
     super('SkyCityGameScene');
@@ -59,6 +86,13 @@ class SkyCityGameScene extends Phaser.Scene {
     // Initialize speed from registry
     const roundData = this.registry.get('skyCityRound') || { roundNumber: 1, baseSpeed: 60 };
     this.currentSpeed = roundData.baseSpeed;
+
+    this.currentLevel = 1;
+    this.hearts = 0;
+    this.lastVictoryHandledSeq = -999;
+    this.inVictorySequence = false;
+    this.drownFailTimer = null;
+    this.failBubbleLayer = null;
 
     // Set camera background
     this.cameras.main.setBackgroundColor(0x87ceeb);
@@ -99,6 +133,9 @@ class SkyCityGameScene extends Phaser.Scene {
       this.togglePause();
     });
 
+    this.victorySound = this.sound.add('victory', { volume: 0.8 });
+    this.skyArrowChallenge = createSkyArrowChallengeState();
+
     // Create first NPC
     this.createNPC();
   }
@@ -129,10 +166,25 @@ class SkyCityGameScene extends Phaser.Scene {
     }
   }
 
+  private cancelPendingDrownRestart(): void {
+    if (this.drownFailTimer) {
+      this.time.removeEvent(this.drownFailTimer);
+      this.drownFailTimer = null;
+    }
+    if (this.failBubbleLayer) {
+      this.failBubbleLayer.destroy(true);
+      this.failBubbleLayer = null;
+    }
+    this.drownRestartScheduled = false;
+  }
+
   createNPC() {
+    destroyTaggedRescueNpcs(this, this.player);
     if (this.npc) {
       this.npc.destroy();
+      this.npc = null;
     }
+    this.cancelPendingDrownRestart();
 
     // Get round data to vary spawn position
     const roundData = this.registry.get('skyCityRound') || { roundNumber: 1, baseSpeed: 60 };
@@ -140,19 +192,21 @@ class SkyCityGameScene extends Phaser.Scene {
     
     // Vary x position based on round
     const xPositions = [150, 400, 650, 250, 550];
-    const buildingX = xPositions[this.currentLevel - 1];
-    
+    const buildingX = xPositions[Math.min(MAX_LEVEL, this.currentLevel) - 1];
+    const lvl = Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
+    const npcTexKey = `npcCity_lv_${lvl}`;
+
     // Create NPC texture first
     const npcGraphicsCity = this.make.graphics({ x: 0, y: 0 }, false);
     npcGraphicsCity.fillStyle(0xff6347, 1);
     npcGraphicsCity.fillCircle(15, 15, 8);
     npcGraphicsCity.fillStyle(0xff7f50, 1);
     npcGraphicsCity.fillCircle(15, 8, 5);
-    npcGraphicsCity.generateTexture('npcCity', 30, 30);
+    npcGraphicsCity.generateTexture(npcTexKey, 30, 30);
     npcGraphicsCity.destroy();
 
     // Start NPC at building height
-    this.npc = this.physics.add.sprite(buildingX, 80, 'npcCity');
+    this.npc = this.physics.add.sprite(buildingX, 80, npcTexKey);
     
     // Calculate falling velocity (almost vertical)
     const angle = 5;
@@ -167,7 +221,7 @@ class SkyCityGameScene extends Phaser.Scene {
     this.baseVelocity = { x: vx, y: vy };
     this.npc.setCollideWorldBounds(false);
     this.npc.setDepth(10);
-
+    this.npc.setData(SKY_RESCUE_NPC_DATA_KEY, true);
 
     this.helpRadius = 100;
     this.levelComplete = false;
@@ -176,47 +230,72 @@ class SkyCityGameScene extends Phaser.Scene {
   }
 
   update() {
-    if (!this.player || this.levelComplete) return;
+    if (!this.player) return;
+
+    const arrowsLocked = tickSkyArrowChallenge(
+      this.time.now,
+      this.isPaused,
+      this.skyArrowChallenge,
+      this.cursors,
+      skyArrowDisabledMessageIndexForLevel(this.currentLevel),
+      (message) => this.onArrowDisabledNudge?.(message),
+    );
+
+    if (this.isPaused || (this.levelComplete && !this.isCarrying)) return;
 
     const speed = 200;
     this.player.setVelocity(0);
 
-    if (this.cursors?.left.isDown) {
-      this.player.setVelocityX(-speed);
-    } else if (this.cursors?.right.isDown) {
-      this.player.setVelocityX(speed);
-    }
-
-    if (this.cursors?.up.isDown) {
-      this.player.setVelocityY(-speed);
-    } else if (this.cursors?.down.isDown) {
-      this.player.setVelocityY(speed);
-    }
-
-    // Check if carrying NPC
     if (this.isCarrying && this.npc) {
       this.npc.setPosition(this.player.x, this.player.y - 30);
-      
+
       const flySpeed = 40;
       const flyAngle = -45;
       const flyVx = flySpeed * Math.cos(flyAngle * Math.PI / 180);
       const flyVy = flySpeed * Math.sin(flyAngle * Math.PI / 180);
-      
+
       this.player.setVelocity(flyVx, flyVy);
       this.npc.setVelocity(flyVx, flyVy);
-      
-      const elapsedTime = this.time.now - this.contactTime;
-      if (elapsedTime >= 10000) {
-        this.completeLevel();
+      return;
+    }
+
+    if (!arrowsLocked) {
+      if (this.cursors?.left.isDown) {
+        this.player.setVelocityX(-speed);
+      } else if (this.cursors?.right.isDown) {
+        this.player.setVelocityX(speed);
       }
-    } else if (this.npc) {
+
+      if (this.cursors?.up.isDown) {
+        this.player.setVelocityY(-speed);
+      } else if (this.cursors?.down.isDown) {
+        this.player.setVelocityY(speed);
+      }
+    }
+
+    if (this.npc) {
       this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
-      
+
       // Check if NPC falls off screen
-      if (this.npc.y > 600 && !this.npcHasBeenTouched) {
-        this.time.delayedCall(3000, () => {
-          this.levelComplete = true;
-          this.scene.restart();
+      if (
+        this.npc.y > 600 &&
+        !this.npcHasBeenTouched &&
+        !this.drownRestartScheduled &&
+        !this.inVictorySequence
+      ) {
+        this.drownRestartScheduled = true;
+        if (!this.failBubbleLayer) {
+          this.failBubbleLayer = mountSkyFailBubbleMessages(this, SKY_CITY_FAIL_MESSAGES);
+        }
+        this.drownFailTimer = this.time.delayedCall(SKY_FAIL_FEEDBACK_MS, () => {
+          this.drownFailTimer = null;
+          if (this.failBubbleLayer) {
+            this.failBubbleLayer.destroy(true);
+            this.failBubbleLayer = null;
+          }
+          this.levelComplete = false;
+          this.drownRestartScheduled = false;
+          this.createNPC();
         });
       }
 
@@ -230,55 +309,77 @@ class SkyCityGameScene extends Phaser.Scene {
         );
 
         if (distance < this.helpRadius && !this.npcHasBeenTouched) {
+          this.cancelPendingDrownRestart();
           this.npcHasBeenTouched = true;
           this.isCarrying = true;
-          this.contactTime = this.time.now;
-          
+
           if (this.onHeartEarned) {
-            this.hearts += 1;
-            this.onHeartEarned(this.hearts, this.currentLevel);
+            this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+            this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+          }
+          if (this.hearts === 1) {
+            notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
           }
 
           if (this.particles) {
             this.particles.emitParticleAt(this.npc.x, this.npc.y, 10);
           }
+
+          this.completeLevel();
         }
       }
     }
   }
 
   nextLevel() {
+    if (this.currentLevel >= MAX_LEVEL) return;
     this.currentLevel += 1;
     this.createNPC();
   }
 
   completeLevel() {
+    this.cancelPendingDrownRestart();
     this.levelComplete = true;
+    this.inVictorySequence = true;
+    const seq = ++this.victoryAdvanceSeq;
 
-    // Play victory sound (sound.play returns boolean, so keep a BaseSound instance)
-    try {
-      if (this.victorySound) {
-        this.victorySound.stop();
-        this.victorySound.destroy();
+    const continueToNextCharacter = () => {
+      if (seq !== this.victoryAdvanceSeq) return;
+      if (this.lastVictoryHandledSeq === seq) return;
+      this.lastVictoryHandledSeq = seq;
+      if (this.currentLevel < MAX_LEVEL) {
+        this.nextLevel();
+      } else if (this.onGameComplete) {
+        this.onGameComplete();
       }
+      this.inVictorySequence = false;
+    };
 
+    if (!this.victorySound) {
       this.victorySound = this.sound.add('victory', { volume: 0.8 });
+    }
 
-      const playVictorySound = () => {
+    this.victorySound.off(Phaser.Sound.Events.COMPLETE);
+    if (this.victorySound.isPlaying) {
+      this.victorySound.stop();
+    }
+
+    this.victorySound.once(Phaser.Sound.Events.COMPLETE, () => {
+      if (seq !== this.victoryAdvanceSeq) return;
+      continueToNextCharacter();
+    });
+
+    this.sound.off(Phaser.Sound.Events.UNLOCKED);
+    if (this.sound.locked) {
+      this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
+        if (seq !== this.victoryAdvanceSeq) return;
         this.victorySound?.play();
-      };
-
-      if (this.sound.locked) {
-        this.sound.once(Phaser.Sound.Events.UNLOCKED, playVictorySound);
-      } else {
-        playVictorySound();
-      }
-    } catch (e) {
-      console.log('Victory sound failed to play:', e);
+      });
+    } else {
+      this.victorySound.play();
     }
 
     if (this.npc) {
-      // Animate NPC rising to top while celebrating
       this.tweens.add({
         targets: this.npc,
         y: -50,
@@ -287,40 +388,21 @@ class SkyCityGameScene extends Phaser.Scene {
         ease: 'Quad.easeInOut',
       });
     }
-
-    if (this.currentLevel < 5) {
-      // Wait for audio to finish or 2.5 seconds before next level
-      const audioDuration = this.victorySound?.duration || 0;
-      const delayTime = Math.max(2500, audioDuration * 1000 + 500);
-      
-      this.time.delayedCall(delayTime, () => {
-        this.nextLevel();
-      });
-    } else {
-      const currentRoundData = this.registry.get('skyCityRound') || { roundNumber: 1, baseSpeed: 60 };
-      const newRoundData = {
-        roundNumber: currentRoundData.roundNumber + 1,
-        baseSpeed: currentRoundData.baseSpeed + 2,
-      };
-      this.registry.set('skyCityRound', newRoundData);
-      
-      // Wait for audio to finish or 2.5 seconds before restarting
-      const audioEndTime = this.victorySound?.duration || 0;
-      const delayTime = Math.max(2500, audioEndTime * 1000 + 500);
-
-      this.time.delayedCall(delayTime, () => {
-        this.scene.restart();
-      });
-    }
   }
 
   togglePause() {
     this.isPaused = !this.isPaused;
-    
+
     if (this.isPaused) {
       this.physics.pause();
+      if (this.victorySound?.isPlaying) {
+        this.victorySound.pause();
+      }
     } else {
       this.physics.resume();
+      if (this.victorySound?.isPaused) {
+        this.victorySound.resume();
+      }
     }
 
     if (this.onPauseStateChange) {
@@ -329,11 +411,11 @@ class SkyCityGameScene extends Phaser.Scene {
   }
 
   getHearts(): number {
-    return this.hearts;
+    return Math.min(MAX_LEVEL, this.hearts);
   }
 
   getCurrentLevel(): number {
-    return this.currentLevel;
+    return Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
   }
 
   getIsPaused(): boolean {
@@ -363,27 +445,33 @@ export default function SkyCityGame() {
 
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
+  const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
-    if (showSpeechBubble) {
-      const timer = setTimeout(() => {
-        setShowSpeechBubble(false);
-      }, 10000);
-      return () => clearTimeout(timer);
-    }
-  }, [showSpeechBubble]);
+    if (!showSpeechBubble) return;
+    const ms = speechBubbleIsArrowLockout ? SKY_FAIL_FEEDBACK_MS : SPEECH_BUBBLE_RESCUE_MS;
+    const timer = window.setTimeout(() => {
+      setShowSpeechBubble(false);
+      setSpeechBubbleIsArrowLockout(false);
+    }, ms);
+    return () => window.clearTimeout(timer);
+  }, [showSpeechBubble, speechBubbleIsArrowLockout]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-hamburger-menu="true"]')) {
+        return;
+      }
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
         setIsMenuOpen(false);
       }
     };
 
     if (isMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [isMenuOpen]);
 
@@ -423,6 +511,7 @@ export default function SkyCityGame() {
 
         scene.onHeartEarned = (newHearts: number, completedLevel: number) => {
           setHearts(newHearts);
+          setSpeechBubbleIsArrowLockout(false);
           setSpeechMessage(levelMessages[completedLevel] || '');
           setShowSpeechBubble(true);
         };
@@ -433,6 +522,12 @@ export default function SkyCityGame() {
 
         scene.onPauseStateChange = (paused: boolean) => {
           setIsPaused(paused);
+        };
+
+        scene.onArrowDisabledNudge = (message: string) => {
+          setSpeechBubbleIsArrowLockout(true);
+          setSpeechMessage(message);
+          setShowSpeechBubble(true);
         };
 
         updateInterval = setInterval(() => {
@@ -453,8 +548,8 @@ export default function SkyCityGame() {
   }, []);
 
   return (
-    <main className="w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
-      <div className="bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
+    <main className="relative w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
+      <div className="relative z-[10050] isolate overflow-visible bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex gap-8">
             <Card className="bg-white/10 border-white/20 px-4 py-2">
@@ -475,8 +570,9 @@ export default function SkyCityGame() {
             </Card>
           </div>
 
-          <div className="relative" ref={menuRef}>
+          <div className="relative" ref={menuRef} data-hamburger-menu="true">
             <button
+              type="button"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
               className="px-4 py-2 bg-white/20 hover:bg-white/30 border border-white/30 rounded text-white font-semibold transition"
               aria-label="Game menu"
@@ -484,88 +580,78 @@ export default function SkyCityGame() {
               ☰
             </button>
             {isMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-50 max-h-96 overflow-y-scroll overscroll-contain">
+              <div
+                data-hamburger-menu="true"
+                className="absolute right-0 mt-2 w-56 bg-gradient-to-b from-blue-900 to-blue-800 border border-white/30 rounded-lg shadow-lg z-[10060] max-h-[min(70vh,calc(100dvh-6rem))] overflow-y-scroll overscroll-contain pointer-events-auto touch-pan-y [scrollbar-gutter:stable]"
+                onPointerDownCapture={(e) => e.stopPropagation()}
+                onWheelCapture={(e) => e.stopPropagation()}
+              >
                 {/* Sky Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Sky Games
                 </div>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-city/play');
-                  }}
+                <Link
+                  href="/games/sky/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🌤️ Sky Challenge
+                </Link>
+                <Link
+                  href="/games/sky-city/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏙️ Sky City Rescue (Current)
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-islands/play');
-                  }}
+                </Link>
+                <Link
+                  href="/games/sky-islands/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏝️ Sky Islands
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sky-fortress/play');
-                  }}
+                </Link>
+                <Link
+                  href="/games/sky-fortress/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏰 Sky Fortress
-                </button>
+                </Link>
                 
                 {/* Other Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Other Games
                 </div>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/sea');
-                  }}
+                <Link
+                  href="/games/sea"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🌊 Savior of the Sea
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/land');
-                  }}
+                </Link>
+                <Link
+                  href="/games/land"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🌲 Savior of the Land
-                </button>
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/games/city');
-                  }}
+                </Link>
+                <Link
+                  href="/games/city"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏢 Saviour of the City
-                </button>
+                </Link>
                 
                 {/* Home Link */}
-                <button
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    router.push('/');
-                  }}
+                <Link
+                  href="/"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
                   🏠 Back to Home
-                </button>
+                </Link>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 flex items-center justify-center overflow-hidden relative">
+      <div className="relative z-0 flex-1 flex items-center justify-center overflow-hidden">
         <div ref={gameRef} className="shadow-2xl rounded-lg overflow-hidden" />
         
         {showSpeechBubble && (
@@ -591,37 +677,42 @@ export default function SkyCityGame() {
             </div>
           </div>
         )}
+
+      </div>
+
+      <div className="bg-black/40 backdrop-blur-sm border-t border-white/20 p-4">
+        <div className="max-w-7xl mx-auto">
+          <p className="text-white/70 text-sm mb-2">City rescue</p>
+          <p className="text-white/50 text-sm">
+            Arrow keys to move — space bar for pause — one heart per rescue. Finish all five saves to open the completion
+            screen with replay or home.
+          </p>
+        </div>
       </div>
 
       {gameState === 'complete' && (
-        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-          <Card className="bg-gradient-to-b from-yellow-100 to-yellow-50 p-8 max-w-md text-center shadow-2xl">
-            <div className="text-6xl mb-4">🏙️</div>
-            <h2 className="text-3xl font-bold text-yellow-900 mb-2">
-              Sky City Champion!
-            </h2>
-            <p className="text-lg text-yellow-700 mb-4">
-              You've saved everyone in the city!
-            </p>
-            <p className="text-2xl font-bold text-yellow-600 mb-6">
-              Total Hearts: {hearts}/5
-            </p>
-            <div className="flex gap-4">
+        <SkyGameCompletionCard
+          completedPhrase="Sky City Rescue!"
+          hearts={hearts}
+          actions={
+            <>
               <button
+                type="button"
                 onClick={() => router.push('/games/sky-city/play')}
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-sky-400 to-blue-500 text-white font-semibold rounded-lg hover:from-sky-300 hover:to-blue-400 transition cursor-pointer"
+                className="flex-1 cursor-pointer rounded-lg bg-gradient-to-r from-sky-400 to-blue-500 px-6 py-3 font-semibold text-white transition hover:from-sky-300 hover:to-blue-400"
               >
                 Play Again
               </button>
               <button
+                type="button"
                 onClick={() => router.push('/')}
-                className="flex-1 px-6 py-3 bg-gray-400 text-white font-semibold rounded-lg hover:bg-gray-500 transition cursor-pointer"
+                className="flex-1 rounded-lg bg-gray-400 px-6 py-3 font-semibold text-white transition hover:bg-gray-500"
               >
                 Home
               </button>
-            </div>
-          </Card>
-        </div>
+            </>
+          }
+        />
       )}
     </main>
   );
