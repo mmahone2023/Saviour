@@ -4,23 +4,22 @@ import * as Phaser from 'phaser';
 export const SKY_FAIL_FEEDBACK_MS = 5000;
 
 export const SKY_BASE_FAIL_MESSAGES = [
-  'They slipped past you into the water!',
-  'Your hearts stay the same — this round will repeat.',
-  'Get ready… another drop is coming.',
+  'They slipped past!',
+  'No worries, your heart count stay\'s the same — You never fail until you stop trying!',
+  'Get ready… another character in need is faaaaaalling!',
 ] as const;
 
 export const SKY_CITY_FAIL_MESSAGES = [
-  'Too late — they fell beyond the skyline!',
-  'No hearts lost. Your total is unchanged.',
-  'Position earlier under the fall path.',
-  'A new attempt starts in a moment.',
+  'Oh no!  They fell beyond the skyline!',
+  'No hearts lost. If you heart\'s is in the right place, you can always try again!',
+  'Just like real-life events, you\'ll get another chance to help someone',
 ] as const;
 
 export const SKY_ISLANDS_FAIL_MESSAGES = [
-  'They vanished below the islands!',
-  'Hearts unchanged — keep your streak.',
+  'They vanished below the sky islands!',
+  'Hearts unchanged — because you never fail until you stop trying!',
   'Anticipate the drift on the next try.',
-  'Hang tight… respawning the rescue.',
+  'Wait for it… another opportunity to rescue is coming!',
 ] as const;
 
 export const SKY_FORTRESS_FAIL_MESSAGES = [
