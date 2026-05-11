@@ -184,10 +184,10 @@ export default function SkyFortressReflectionPage() {
                 {status === 'submitting' ? 'Sending…' : 'Send reflection'}
               </button>
               <Link
-                href="/games/sky-fortress/play"
+                href="/"
                 className="flex-1 rounded-lg border border-white/30 bg-white/5 px-6 py-3 text-center font-semibold text-white hover:bg-white/10 transition"
               >
-                Play again
+                Landing page
               </Link>
             </div>
           </form>

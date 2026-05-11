@@ -802,11 +802,11 @@ export default function SkyCityGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/games/sky-city/play');
+                  router.push('/');
                 }}
                 className="flex-1 cursor-pointer rounded-lg bg-gradient-to-r from-sky-400 to-blue-500 px-6 py-3 font-semibold text-white transition hover:from-sky-300 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Play Again
+                Landing page
               </button>
               <button
                 type="button"

@@ -850,11 +850,11 @@ export default function SkyFortressGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  window.location.assign('/games/sky-fortress/play');
+                  window.location.assign('/');
                 }}
                 className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Play again
+                Landing page
               </button>
             </>
           }
