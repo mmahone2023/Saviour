@@ -43,10 +43,18 @@ class SkyCityGameScene extends Phaser.Scene {
   private inVictorySequence: boolean = false;
   private failBubbleLayer: Phaser.GameObjects.Container | null = null;
   private victoryAdvanceSeq: number = 0;
+  private rescueAdvanceSeq: number = 0;
   private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 60;
   private isPaused: boolean = false;
-  
+  private isFloatingAfterRescue: boolean = false;
+  private floatStartTime: number = 0;
+  private hasExitedBounds: boolean = false;
+  /** Saviour floats upward to completely exit screen after NPC disappears. */
+  private isExitingUpwardAfterRescue: boolean = false;
+  private exitUpwardStartTime: number = 0;
+  private isReturningToCenterAfterRescue: boolean = false;
+
   private levelMessages: Record<number, string> = {
     1: 'Thank you for saving me from the rooftop!',
     2: 'You caught me mid-fall! You are a true hero!',
@@ -100,22 +108,94 @@ class SkyCityGameScene extends Phaser.Scene {
     // Create sky city buildings background
     this.createBuildings();
 
-    // Create player with simple graphics
+    // Create a more human-like player silhouette (head, torso, limbs, and cape).
     const playerGraphics = this.make.graphics({ x: 0, y: 0 }, false);
-    playerGraphics.fillStyle(0xffc0cb, 1);
-    playerGraphics.fillCircle(15, 15, 8);
-    playerGraphics.fillStyle(0xfdb4b4, 1);
-    playerGraphics.fillCircle(15, 8, 5);
-    playerGraphics.lineStyle(3, 0xc41e3a);
+    // Cape (warm red-orange, like the home-page hero)
+    playerGraphics.fillStyle(0xe0432b, 1);
     playerGraphics.beginPath();
-    playerGraphics.moveTo(7, 15);
-    playerGraphics.lineTo(3, 25);
-    playerGraphics.stroke();
+    playerGraphics.moveTo(18, 12);
+    playerGraphics.lineTo(8, 32);
+    playerGraphics.lineTo(28, 32);
+    playerGraphics.closePath();
+    playerGraphics.fillPath();
+
+    // Torso (golden suit)
+    playerGraphics.fillStyle(0xf2b53a, 1);
+    playerGraphics.fillRoundedRect(14, 15, 8, 14, 3);
+
+    // Chest emblem with "S"
+    playerGraphics.fillStyle(0xb6251d, 1);
+    playerGraphics.fillCircle(18, 22, 4);
+    playerGraphics.fillStyle(0xfde68a, 1);
+    playerGraphics.fillRect(16, 20, 4, 1.2);
+    playerGraphics.fillRect(16, 22, 4, 1.2);
+    playerGraphics.fillRect(16, 24, 4, 1.2);
+    playerGraphics.fillRect(16, 20, 1.2, 3);
+    playerGraphics.fillRect(18.8, 22, 1.2, 3);
+
+    // Head + face
+    playerGraphics.fillStyle(0xf2b48c, 1);
+    playerGraphics.fillCircle(18, 9.5, 4.5);
+
+    // Helmet with side horns (home-page inspired)
+    playerGraphics.fillStyle(0xd78a21, 1);
     playerGraphics.beginPath();
-    playerGraphics.moveTo(23, 15);
+    playerGraphics.moveTo(13, 10);
+    playerGraphics.lineTo(14, 4);
+    playerGraphics.lineTo(18, 2.5);
+    playerGraphics.lineTo(22, 4);
+    playerGraphics.lineTo(23, 10);
+    playerGraphics.closePath();
+    playerGraphics.fillPath();
+    // Horns
+    playerGraphics.fillStyle(0xf6d365, 1);
+    playerGraphics.fillTriangle(14, 5.5, 12.4, 1.2, 14.8, 5.4);
+    playerGraphics.fillTriangle(22, 5.5, 23.6, 1.2, 21.2, 5.4);
+
+    // Human-like facial features
+    playerGraphics.fillStyle(0x3f2a1f, 1);
+    playerGraphics.fillRect(15.2, 8.3, 1.7, 0.55); // left brow
+    playerGraphics.fillRect(19.1, 8.3, 1.7, 0.55); // right brow
+    playerGraphics.fillStyle(0xffffff, 1);
+    playerGraphics.fillCircle(16.2, 9.5, 0.75);
+    playerGraphics.fillCircle(19.8, 9.5, 0.75);
+    playerGraphics.fillStyle(0x2a211b, 1);
+    playerGraphics.fillCircle(16.2, 9.5, 0.35);
+    playerGraphics.fillCircle(19.8, 9.5, 0.35);
+    playerGraphics.lineStyle(1, 0x8b5a3c);
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(18, 10);
+    playerGraphics.lineTo(17.8, 11.2); // nose
+    playerGraphics.strokePath();
+    playerGraphics.lineStyle(1, 0x7a2f22);
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(16.6, 12.1);
+    playerGraphics.lineTo(19.4, 12.1); // mouth
+    playerGraphics.strokePath();
+
+    // Arms
+    playerGraphics.lineStyle(2, 0xf2b53a);
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(14, 19);
+    playerGraphics.lineTo(9, 25);
+    playerGraphics.strokePath();
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(22, 19);
     playerGraphics.lineTo(27, 25);
-    playerGraphics.stroke();
-    playerGraphics.generateTexture('playerTex', 30, 30);
+    playerGraphics.strokePath();
+
+    // Legs
+    playerGraphics.lineStyle(2, 0xd98b24);
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(16, 29);
+    playerGraphics.lineTo(14, 38);
+    playerGraphics.strokePath();
+    playerGraphics.beginPath();
+    playerGraphics.moveTo(20, 29);
+    playerGraphics.lineTo(22, 38);
+    playerGraphics.strokePath();
+
+    playerGraphics.generateTexture('playerTex', 36, 42);
     playerGraphics.destroy();
 
     this.player = this.physics.add.sprite(400, 300, 'playerTex');
@@ -227,6 +307,10 @@ class SkyCityGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.isCarrying = false;
     this.npcHasBeenTouched = false;
+    this.isFloatingAfterRescue = false;
+    this.floatStartTime = 0;
+    this.hasExitedBounds = false;
+    this.isReturningToCenterAfterRescue = false;
   }
 
   update() {
@@ -241,21 +325,95 @@ class SkyCityGameScene extends Phaser.Scene {
       (message) => this.onArrowDisabledNudge?.(message),
     );
 
-    if (this.isPaused || (this.levelComplete && !this.isCarrying)) return;
+    if (
+      this.isPaused ||
+      (this.levelComplete &&
+        !this.isCarrying &&
+        !this.isFloatingAfterRescue &&
+        !this.isReturningToCenterAfterRescue &&
+        !this.isExitingUpwardAfterRescue)
+    ) {
+      return;
+    }
 
     const speed = 200;
     this.player.setVelocity(0);
 
-    if (this.isCarrying && this.npc) {
-      this.npc.setPosition(this.player.x, this.player.y - 30);
+    // Phase 1: Saviour exits upward (ascending further off-screen)
+    if (this.isExitingUpwardAfterRescue) {
+      const exitElapsed = this.time.now - this.exitUpwardStartTime;
+      const exitDuration = 1500; // 1.5 seconds to fully exit screen
+      
+      if (exitElapsed < exitDuration) {
+        // Allow Saviour to exit beyond bounds
+        this.player.setCollideWorldBounds(false);
+        const upwardSpeed = 100;
+        this.player.setVelocity(0, -upwardSpeed);
+      } else {
+        // Finished exiting, now return to center
+        this.isExitingUpwardAfterRescue = false;
+        this.isReturningToCenterAfterRescue = true;
+        this.player.setVelocity(0, 0);
+        this.player.setCollideWorldBounds(true);
+      }
+      return;
+    }
 
-      const flySpeed = 40;
-      const flyAngle = -45;
-      const flyVx = flySpeed * Math.cos(flyAngle * Math.PI / 180);
-      const flyVy = flySpeed * Math.sin(flyAngle * Math.PI / 180);
+    // Phase 2: Saviour descends back to center
+    if (this.isReturningToCenterAfterRescue) {
+      const centerX = this.cameras.main.width / 2;
+      const centerY = this.cameras.main.height / 2;
+      const dx = centerX - this.player.x;
+      const dy = centerY - this.player.y;
+      const d = Math.hypot(dx, dy);
+      const returnSpeed = 160;
+      if (d < 8) {
+        this.player.setPosition(centerX, centerY);
+        this.player.setVelocity(0, 0);
+        this.isReturningToCenterAfterRescue = false;
+        this.isFloatingAfterRescue = true;
+        this.floatStartTime = this.time.now;
+      } else {
+        this.player.setVelocity((dx / d) * returnSpeed, (dy / d) * returnSpeed);
+      }
+      return;
+    }
+
+    if (this.isFloatingAfterRescue) {
+      const centerX = this.cameras.main.width / 2;
+      const centerY = this.cameras.main.height / 2;
+      const floatElapsed = this.time.now - this.floatStartTime;
+      const tSec = floatElapsed * 0.001;
+      const bobPeriodSec = 4.25;
+      const floatAmplitude = 44;
+      const floatOffsetY =
+        Math.sin((tSec * 2 * Math.PI) / bobPeriodSec) * floatAmplitude;
+
+      this.player.setPosition(centerX, centerY + floatOffsetY);
+      this.player.setVelocity(0, 0);
+      return;
+    }
+
+    if (this.isCarrying && this.npc) {
+      const { vx: flyVx, vy: flyVy } = this.getRescueDiagonalAscentVelocity(60);
 
       this.player.setVelocity(flyVx, flyVy);
+      this.npc.setPosition(this.player.x, this.player.y - 30);
       this.npc.setVelocity(flyVx, flyVy);
+
+      if (
+        !this.hasExitedBounds &&
+        this.isCompletelyOutsideCanvas(this.player) &&
+        this.isCompletelyOutsideCanvas(this.npc)
+      ) {
+        this.hasExitedBounds = true;
+        this.npc.destroy();
+        this.npc = null;
+        this.isCarrying = false;
+        this.isExitingUpwardAfterRescue = true;
+        this.exitUpwardStartTime = this.time.now;
+      }
+
       return;
     }
 
@@ -312,6 +470,8 @@ class SkyCityGameScene extends Phaser.Scene {
           this.cancelPendingDrownRestart();
           this.npcHasBeenTouched = true;
           this.isCarrying = true;
+          this.hasExitedBounds = false;
+          this.player.setCollideWorldBounds(false);
 
           if (this.onHeartEarned) {
             this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
@@ -325,7 +485,7 @@ class SkyCityGameScene extends Phaser.Scene {
             this.particles.emitParticleAt(this.npc.x, this.npc.y, 10);
           }
 
-          this.completeLevel();
+          this.beginRescueCelebration();
         }
       }
     }
@@ -337,22 +497,42 @@ class SkyCityGameScene extends Phaser.Scene {
     this.createNPC();
   }
 
-  completeLevel() {
+  private isCompletelyOutsideCanvas(sprite: Phaser.Physics.Arcade.Sprite, pad: number = 40): boolean {
+    const v = this.cameras.main.worldView;
+    return (
+      sprite.x < v.x - pad ||
+      sprite.x > v.x + v.width + pad ||
+      sprite.y < v.y - pad ||
+      sprite.y > v.y + v.height + pad
+    );
+  }
+
+  private getRescueDiagonalAscentVelocity(flySpeed: number): { vx: number; vy: number } {
+    if (!this.player) return { vx: 0, vy: -flySpeed };
+    const centerX = this.cameras.main.width / 2;
+    const centerY = this.cameras.main.height / 2;
+    const aimY = centerY - this.cameras.main.height * 0.42;
+    const dx = centerX - this.player.x;
+    const dy = aimY - this.player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1e-6) {
+      return { vx: 0, vy: -flySpeed };
+    }
+    return { vx: (dx / dist) * flySpeed, vy: (dy / dist) * flySpeed };
+  }
+
+  private beginRescueCelebration(): void {
     this.cancelPendingDrownRestart();
     this.levelComplete = true;
     this.inVictorySequence = true;
-    const seq = ++this.victoryAdvanceSeq;
+    this.rescueAdvanceSeq = ++this.victoryAdvanceSeq;
+    const soundSeq = this.rescueAdvanceSeq;
 
-    const continueToNextCharacter = () => {
-      if (seq !== this.victoryAdvanceSeq) return;
-      if (this.lastVictoryHandledSeq === seq) return;
-      this.lastVictoryHandledSeq = seq;
-      if (this.currentLevel < MAX_LEVEL) {
-        this.nextLevel();
-      } else if (this.onGameComplete) {
-        this.onGameComplete();
-      }
-      this.inVictorySequence = false;
+    const attachVictoryCompleteHandler = () => {
+      this.victorySound?.once(Phaser.Sound.Events.COMPLETE, () => {
+        if (soundSeq !== this.rescueAdvanceSeq) return;
+        this.completeRescueAfterFloat();
+      });
     };
 
     if (!this.victorySound) {
@@ -364,29 +544,47 @@ class SkyCityGameScene extends Phaser.Scene {
       this.victorySound.stop();
     }
 
-    this.victorySound.once(Phaser.Sound.Events.COMPLETE, () => {
-      if (seq !== this.victoryAdvanceSeq) return;
-      continueToNextCharacter();
-    });
-
     this.sound.off(Phaser.Sound.Events.UNLOCKED);
     if (this.sound.locked) {
       this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
-        if (seq !== this.victoryAdvanceSeq) return;
+        if (soundSeq !== this.rescueAdvanceSeq) return;
         this.victorySound?.play();
+        attachVictoryCompleteHandler();
       });
     } else {
       this.victorySound.play();
+      attachVictoryCompleteHandler();
     }
+  }
+
+  private completeRescueAfterFloat(): void {
+    const seq = this.rescueAdvanceSeq;
+    if (seq !== this.victoryAdvanceSeq) return;
+    if (this.lastVictoryHandledSeq === seq) return;
+    this.lastVictoryHandledSeq = seq;
 
     if (this.npc) {
-      this.tweens.add({
-        targets: this.npc,
-        y: -50,
-        scale: 1.2,
-        duration: 2000,
-        ease: 'Quad.easeInOut',
-      });
+      this.npc.destroy();
+      this.npc = null;
+    }
+    this.isCarrying = false;
+    this.isFloatingAfterRescue = false;
+    this.isReturningToCenterAfterRescue = false;
+    this.hasExitedBounds = false;
+
+    const cx = this.cameras.main.width / 2;
+    const cy = this.cameras.main.height / 2;
+    this.player?.setPosition(cx, cy);
+    this.player?.setVelocity(0, 0);
+
+    this.levelComplete = false;
+    this.inVictorySequence = false;
+    this.player?.setCollideWorldBounds(true);
+
+    if (this.currentLevel < MAX_LEVEL) {
+      this.nextLevel();
+    } else if (this.onGameComplete) {
+      this.onGameComplete();
     }
   }
 
