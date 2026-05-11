@@ -816,7 +816,7 @@ export default function SkyIslandsGame() {
                 }}
                 className="flex-1 cursor-pointer rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Landing page
+                Back Home
               </button>
             </>
           }

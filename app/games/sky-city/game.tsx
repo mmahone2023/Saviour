@@ -806,7 +806,7 @@ export default function SkyCityGame() {
                 }}
                 className="flex-1 cursor-pointer rounded-lg bg-gradient-to-r from-sky-400 to-blue-500 px-6 py-3 font-semibold text-white transition hover:from-sky-300 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Landing page
+                Back Home
               </button>
               <button
                 type="button"
