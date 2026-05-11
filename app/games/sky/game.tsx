@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Phaser from 'phaser';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/card';
 import { SkyGameCompletionCard } from '@/components/sky-game-completion-card';
 import {
@@ -20,6 +21,7 @@ import {
 } from '@/app/games/sky-rescue-fail-bubbles';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
+const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
 
 const MAX_LEVEL = 5;
 
@@ -52,14 +54,7 @@ class SkyGameScene extends Phaser.Scene {
   private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 50; // Starting speed, increases by 5 each round
   private isPaused: boolean = false;
-  private isFloatingAfterRescue: boolean = false;
-  private floatStartTime: number = 0;
   private hasExitedBounds: boolean = false;
-  /** Saviour floats upward to completely exit screen after NPC disappears. */
-  private isExitingUpwardAfterRescue: boolean = false;
-  private exitUpwardStartTime: number = 0;
-  /** After flying off-screen, glide back to center before the hover loop. */
-  private isReturningToCenterAfterRescue: boolean = false;
 
   private npcList: Array<{
     name: string;
@@ -109,16 +104,13 @@ class SkyGameScene extends Phaser.Scene {
   onGameComplete: (() => void) | null = null;
   onPauseStateChange: ((isPaused: boolean) => void) | null = null;
   onArrowDisabledNudge: ((message: string) => void) | null = null;
-  private victorySound: Phaser.Sound.BaseSound | null = null;
   private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
     super({ key: 'SkyGameScene' });
   }
 
-  preload() {
-    this.load.audio('victory', '/audio/saviour.wav');
-  }
+  preload() {}
 
   create() {
     // Initialize speed from registry for continuous rounds
@@ -155,6 +147,7 @@ class SkyGameScene extends Phaser.Scene {
     this.player.setScale(1.5);
     this.player.setBounce(0.2);
     this.player.setCollideWorldBounds(true);
+    (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
     this.player.setDepth(10);
 
     // Create a more human-like player silhouette (head, torso, limbs, and cape).
@@ -264,7 +257,6 @@ class SkyGameScene extends Phaser.Scene {
       this.togglePause();
     });
 
-    this.victorySound = this.sound.add('victory', { volume: 0.8 });
     this.skyArrowChallenge = createSkyArrowChallengeState();
 
     // Set up physics
@@ -383,16 +375,13 @@ class SkyGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.isCarrying = false;
     this.npcHasBeenTouched = false;
-    this.isFloatingAfterRescue = false;
-    this.floatStartTime = 0;
     this.hasExitedBounds = false;
-    this.isReturningToCenterAfterRescue = false;
   }
 
   update() {
     if (!this.player) return;
 
-    const arrowsLocked = tickSkyArrowChallenge(
+    tickSkyArrowChallenge(
       this.time.now,
       this.isPaused,
       this.skyArrowChallenge,
@@ -401,14 +390,7 @@ class SkyGameScene extends Phaser.Scene {
       (message) => this.onArrowDisabledNudge?.(message),
     );
 
-    if (
-      this.isPaused ||
-      (this.levelComplete &&
-        !this.isCarrying &&
-        !this.isFloatingAfterRescue &&
-        !this.isReturningToCenterAfterRescue &&
-        !this.isExitingUpwardAfterRescue)
-    ) {
+    if (this.isPaused) {
       return;
     }
 
@@ -416,68 +398,22 @@ class SkyGameScene extends Phaser.Scene {
     const speed = 300;
     this.player.setVelocity(0);
 
-    // Phase 1: Saviour exits upward (ascending further off-screen)
-    if (this.isExitingUpwardAfterRescue) {
-      const exitElapsed = this.time.now - this.exitUpwardStartTime;
-      const exitDuration = 1500; // 1.5 seconds to fully exit screen
-      
-      if (exitElapsed < exitDuration) {
-        // Allow Saviour to exit beyond bounds
-        this.player.setCollideWorldBounds(false);
-        const upwardSpeed = 100;
-        this.player.setVelocity(0, -upwardSpeed);
-      } else {
-        // Finished exiting, now return to center
-        this.isExitingUpwardAfterRescue = false;
-        this.isReturningToCenterAfterRescue = true;
-        this.player.setVelocity(0, 0);
-        this.player.setCollideWorldBounds(true);
-      }
-      return;
+    if (this.cursors?.left.isDown) {
+      this.player.setVelocityX(-speed);
+    } else if (this.cursors?.right.isDown) {
+      this.player.setVelocityX(speed);
     }
 
-    // Phase 2: Saviour descends back to center
-    if (this.isReturningToCenterAfterRescue) {
-      const centerX = this.cameras.main.width / 2;
-      const centerY = this.cameras.main.height / 2;
-      const dx = centerX - this.player.x;
-      const dy = centerY - this.player.y;
-      const d = Math.hypot(dx, dy);
-      const returnSpeed = 160;
-      if (d < 8) {
-        this.player.setPosition(centerX, centerY);
-        this.player.setVelocity(0, 0);
-        this.isReturningToCenterAfterRescue = false;
-        this.isFloatingAfterRescue = true;
-        this.floatStartTime = this.time.now;
-      } else {
-        this.player.setVelocity((dx / d) * returnSpeed, (dy / d) * returnSpeed);
-      }
-      return;
-    }
-
-    // Phase 3: Gentle vertical bob at center (seconds-based sine = smooth, not jittery)
-    if (this.isFloatingAfterRescue) {
-      const centerX = this.cameras.main.width / 2;
-      const centerY = this.cameras.main.height / 2;
-      const floatElapsed = this.time.now - this.floatStartTime;
-      const tSec = floatElapsed * 0.001;
-      const bobPeriodSec = 4.25;
-      const floatAmplitude = 44;
-      const floatOffsetY =
-        Math.sin((tSec * 2 * Math.PI) / bobPeriodSec) * floatAmplitude;
-
-      this.player.setPosition(centerX, centerY + floatOffsetY);
-      this.player.setVelocity(0, 0);
-      return;
+    if (this.cursors?.up.isDown) {
+      this.player.setVelocityY(-speed);
+    } else if (this.cursors?.down.isDown) {
+      this.player.setVelocityY(speed);
     }
 
     if (this.isCarrying && this.npc) {
-      const { vx: flyVx, vy: flyVy } = this.getRescueDiagonalAscentVelocity(60);
-
-      this.player.setVelocity(flyVx, flyVy);
+      const body = this.player.body as Phaser.Physics.Arcade.Body;
       this.npc.setPosition(this.player.x, this.player.y - 30);
-      this.npc.setVelocity(flyVx, flyVy);
+      this.npc.setVelocity(body.velocity.x, body.velocity.y);
 
       if (
         !this.hasExitedBounds &&
@@ -488,28 +424,13 @@ class SkyGameScene extends Phaser.Scene {
         this.npc.destroy();
         this.npc = null;
         this.isCarrying = false;
-        this.isExitingUpwardAfterRescue = true;
-        this.exitUpwardStartTime = this.time.now;
+        this.completeRescueAfterFloat();
       }
 
       return;
     }
 
-    if (!arrowsLocked) {
-      if (this.cursors?.left.isDown) {
-        this.player.setVelocityX(-speed);
-      } else if (this.cursors?.right.isDown) {
-        this.player.setVelocityX(speed);
-      }
-
-      if (this.cursors?.up.isDown) {
-        this.player.setVelocityY(-speed);
-      } else if (this.cursors?.down.isDown) {
-        this.player.setVelocityY(speed);
-      }
-    }
-
-    if (this.npc) {
+    if (this.npc && !this.isCarrying) {
       this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
 
       // Check if NPC touches water (below 450 pixels)
@@ -589,63 +510,11 @@ class SkyGameScene extends Phaser.Scene {
     );
   }
 
-  /**
-   * Fly diagonally toward the top-center: aim at a point above screen center so the path
-   * clearly moves inward (toward center X) and upward until leaving the view.
-   */
-  private getRescueDiagonalAscentVelocity(flySpeed: number): { vx: number; vy: number } {
-    if (!this.player) return { vx: 0, vy: -flySpeed };
-    const centerX = this.cameras.main.width / 2;
-    const centerY = this.cameras.main.height / 2;
-    const aimY = centerY - this.cameras.main.height * 0.42;
-    const dx = centerX - this.player.x;
-    const dy = aimY - this.player.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 1e-6) {
-      return { vx: 0, vy: -flySpeed };
-    }
-    return { vx: (dx / dist) * flySpeed, vy: (dy / dist) * flySpeed };
-  }
-
   private beginRescueCelebration(): void {
     this.cancelPendingDrownRestart();
     this.levelComplete = true;
     this.inVictorySequence = true;
     this.rescueAdvanceSeq = ++this.victoryAdvanceSeq;
-    const soundSeq = this.rescueAdvanceSeq;
-
-    const attachVictoryCompleteHandler = () => {
-      this.victorySound?.once(Phaser.Sound.Events.COMPLETE, () => {
-        if (soundSeq !== this.rescueAdvanceSeq) return;
-        this.completeRescueAfterFloat();
-      });
-    };
-
-    try {
-      if (!this.victorySound) {
-        this.victorySound = this.sound.add('victory', { volume: 0.8 });
-      }
-
-      this.victorySound.off(Phaser.Sound.Events.COMPLETE);
-      if (this.victorySound.isPlaying) {
-        this.victorySound.stop();
-      }
-
-      this.sound.off(Phaser.Sound.Events.UNLOCKED);
-      if (this.sound.locked) {
-        this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
-          if (soundSeq !== this.rescueAdvanceSeq) return;
-          this.victorySound?.play();
-          attachVictoryCompleteHandler();
-        });
-      } else {
-        this.victorySound.play();
-        attachVictoryCompleteHandler();
-      }
-    } catch (e) {
-      console.log('Victory sound failed to play:', e);
-      this.completeRescueAfterFloat();
-    }
   }
 
   private completeRescueAfterFloat(): void {
@@ -659,8 +528,6 @@ class SkyGameScene extends Phaser.Scene {
       this.npc = null;
     }
     this.isCarrying = false;
-    this.isFloatingAfterRescue = false;
-    this.isReturningToCenterAfterRescue = false;
     this.hasExitedBounds = false;
 
     const cx = this.cameras.main.width / 2;
@@ -671,6 +538,9 @@ class SkyGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.inVictorySequence = false;
     this.player?.setCollideWorldBounds(true);
+    if (this.player?.body) {
+      (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
+    }
 
     if (this.currentLevel < MAX_LEVEL) {
       this.nextLevel();
@@ -700,14 +570,8 @@ class SkyGameScene extends Phaser.Scene {
     
     if (this.isPaused) {
       this.physics.pause();
-      if (this.victorySound?.isPlaying) {
-        this.victorySound.pause();
-      }
     } else {
       this.physics.resume();
-      if (this.victorySound?.isPaused) {
-        this.victorySound.resume();
-      }
     }
 
     if (this.onPauseStateChange) {
@@ -722,6 +586,7 @@ class SkyGameScene extends Phaser.Scene {
 
 // Main Game Component
 export default function SkyGame() {
+  const router = useRouter();
   const gameRef = useRef<HTMLDivElement>(null);
   const [, setGame] = useState<Phaser.Game | null>(null);
   const [hearts, setHearts] = useState(0);
@@ -734,9 +599,11 @@ export default function SkyGame() {
   /** Arrow-lockout nudges use the same on-screen duration as fail-feedback bubbles (see SKY_FAIL_FEEDBACK_MS). */
   const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isAnthemPlaying, setIsAnthemPlaying] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const sceneRef = useRef<SkyGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const levelMessages: Record<number, string> = {
     1: 'You saved my life. Thank you so much!',
@@ -772,6 +639,32 @@ export default function SkyGame() {
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [isMenuOpen]);
+
+  useEffect(() => {
+    if (gameState !== 'complete') return;
+    const audio = new Audio('/audio/saviour.wav');
+    victoryAudioRef.current = audio;
+    setIsAnthemPlaying(true);
+    const finishPlayback = () => {
+      setIsAnthemPlaying(false);
+      if (victoryAudioRef.current === audio) {
+        victoryAudioRef.current = null;
+      }
+    };
+    audio.addEventListener('ended', finishPlayback);
+    audio.addEventListener('error', finishPlayback);
+    void audio.play().catch(() => finishPlayback());
+    return () => {
+      audio.removeEventListener('ended', finishPlayback);
+      audio.removeEventListener('error', finishPlayback);
+      audio.pause();
+      audio.currentTime = 0;
+      if (victoryAudioRef.current === audio) {
+        victoryAudioRef.current = null;
+      }
+      setIsAnthemPlaying(false);
+    };
+  }, [gameState]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -1006,20 +899,32 @@ export default function SkyGame() {
           completedPhrase="the Sky Challenge!"
           hearts={hearts}
           tagline="Continue your adventure to the Sky Islands..."
+          actionsDisabled={isAnthemPlaying}
+          disabledHoverMessage={VICTORY_LOCK_HOVER_MESSAGE}
           actions={
             <>
-              <Link
-                href="/games/sky-islands/play"
-                className="flex-1 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-6 py-3 text-center font-semibold text-white transition hover:from-purple-400 hover:to-pink-400"
+              <button
+                type="button"
+                disabled={isAnthemPlaying}
+                onClick={() => {
+                  if (isAnthemPlaying) return;
+                  router.push('/games/sky-islands/play');
+                }}
+                className="flex-1 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 px-6 py-3 text-center font-semibold text-white transition hover:from-purple-400 hover:to-pink-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 🏝️ Sky Islands
-              </Link>
-              <Link
-                href="/"
-                className="flex-1 rounded-lg bg-gray-400 px-6 py-3 text-center font-semibold text-white transition hover:bg-gray-500"
+              </button>
+              <button
+                type="button"
+                disabled={isAnthemPlaying}
+                onClick={() => {
+                  if (isAnthemPlaying) return;
+                  router.push('/');
+                }}
+                className="flex-1 rounded-lg bg-gray-400 px-6 py-3 text-center font-semibold text-white transition hover:bg-gray-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Home
-              </Link>
+              </button>
             </>
           }
         />

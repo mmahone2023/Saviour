@@ -21,6 +21,7 @@ import {
 } from '@/app/games/sky-rescue-fail-bubbles';
 
 const MAX_LEVEL = 5;
+const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
 
 // Sky Fortress Game Scene
 class SkyFortressGameScene extends Phaser.Scene {
@@ -45,14 +46,7 @@ class SkyFortressGameScene extends Phaser.Scene {
   private lastVictoryHandledSeq: number = -999;
   private currentSpeed: number = 85;
   private isPaused: boolean = false;
-  private isFloatingAfterRescue: boolean = false;
-  private floatStartTime: number = 0;
   private hasExitedBounds: boolean = false;
-  private isReturningToCenterAfterRescue: boolean = false;
-  /** Saviour floats upward to completely exit screen after NPC disappears. */
-  private isExitingUpwardAfterRescue: boolean = false;
-  private exitUpwardStartTime: number = 0;
-  
 
   private levelMessages: Record<number, string> = {
     1: 'I can\'t thank you enough for saving me!',
@@ -77,17 +71,13 @@ class SkyFortressGameScene extends Phaser.Scene {
   onGameComplete: (() => void) | null = null;
   onPauseStateChange: ((isPaused: boolean) => void) | null = null;
   onArrowDisabledNudge: ((message: string) => void) | null = null;
-  private victorySound: Phaser.Sound.BaseSound | null = null;
   private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
     super('SkyFortressGameScene');
   }
 
-  preload() {
-    // Load victory sound
-    this.load.audio('victory', '/audio/saviour.wav');
-  }
+  preload() {}
 
   create() {
     const roundData = this.registry.get('skyFortressRound') || { roundNumber: 1, baseSpeed: 85 };
@@ -196,6 +186,7 @@ class SkyFortressGameScene extends Phaser.Scene {
 
     this.player = this.physics.add.sprite(400, 300, 'player');
     this.player.setCollideWorldBounds(true);
+    (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
 
     this.particles = this.add.particles(0xffd700);
     this.particles.stop();
@@ -207,7 +198,6 @@ class SkyFortressGameScene extends Phaser.Scene {
       this.togglePause();
     });
 
-    this.victorySound = this.sound.add('victory', { volume: 0.8 });
     this.skyArrowChallenge = createSkyArrowChallengeState();
 
     this.createNPC();
@@ -321,16 +311,13 @@ class SkyFortressGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.isCarrying = false;
     this.npcHasBeenTouched = false;
-    this.isFloatingAfterRescue = false;
-    this.floatStartTime = 0;
     this.hasExitedBounds = false;
-    this.isReturningToCenterAfterRescue = false;
   }
 
   update() {
     if (!this.player) return;
 
-    const arrowsLocked = tickSkyArrowChallenge(
+    tickSkyArrowChallenge(
       this.time.now,
       this.isPaused,
       this.skyArrowChallenge,
@@ -339,81 +326,29 @@ class SkyFortressGameScene extends Phaser.Scene {
       (message) => this.onArrowDisabledNudge?.(message),
     );
 
-    if (
-      this.isPaused ||
-      (this.levelComplete &&
-        !this.isCarrying &&
-        !this.isFloatingAfterRescue &&
-        !this.isReturningToCenterAfterRescue &&
-        !this.isExitingUpwardAfterRescue)
-    ) {
+    if (this.isPaused) {
       return;
     }
 
     const speed = 300;
     this.player.setVelocity(0);
 
-    // Phase 1: Saviour exits upward (ascending further off-screen)
-    if (this.isExitingUpwardAfterRescue) {
-      const exitElapsed = this.time.now - this.exitUpwardStartTime;
-      const exitDuration = 1500; // 1.5 seconds to fully exit screen
-      
-      if (exitElapsed < exitDuration) {
-        // Allow Saviour to exit beyond bounds
-        this.player.setCollideWorldBounds(false);
-        const upwardSpeed = 100;
-        this.player.setVelocity(0, -upwardSpeed);
-      } else {
-        // Finished exiting, now return to center
-        this.isExitingUpwardAfterRescue = false;
-        this.isReturningToCenterAfterRescue = true;
-        this.player.setVelocity(0, 0);
-        this.player.setCollideWorldBounds(true);
-      }
-      return;
+    if (this.cursors?.left.isDown) {
+      this.player.setVelocityX(-speed);
+    } else if (this.cursors?.right.isDown) {
+      this.player.setVelocityX(speed);
     }
 
-    // Phase 2: Saviour descends back to center
-    if (this.isReturningToCenterAfterRescue) {
-      const centerX = this.cameras.main.width / 2;
-      const centerY = this.cameras.main.height / 2;
-      const dx = centerX - this.player.x;
-      const dy = centerY - this.player.y;
-      const d = Math.hypot(dx, dy);
-      const returnSpeed = 160;
-      if (d < 8) {
-        this.player.setPosition(centerX, centerY);
-        this.player.setVelocity(0, 0);
-        this.isReturningToCenterAfterRescue = false;
-        this.isFloatingAfterRescue = true;
-        this.floatStartTime = this.time.now;
-      } else {
-        this.player.setVelocity((dx / d) * returnSpeed, (dy / d) * returnSpeed);
-      }
-      return;
-    }
-
-    if (this.isFloatingAfterRescue) {
-      const centerX = this.cameras.main.width / 2;
-      const centerY = this.cameras.main.height / 2;
-      const floatElapsed = this.time.now - this.floatStartTime;
-      const tSec = floatElapsed * 0.001;
-      const bobPeriodSec = 4.25;
-      const floatAmplitude = 44;
-      const floatOffsetY =
-        Math.sin((tSec * 2 * Math.PI) / bobPeriodSec) * floatAmplitude;
-
-      this.player.setPosition(centerX, centerY + floatOffsetY);
-      this.player.setVelocity(0, 0);
-      return;
+    if (this.cursors?.up.isDown) {
+      this.player.setVelocityY(-speed);
+    } else if (this.cursors?.down.isDown) {
+      this.player.setVelocityY(speed);
     }
 
     if (this.isCarrying && this.npc) {
-      const { vx: flyVx, vy: flyVy } = this.getRescueDiagonalAscentVelocity(60);
-
-      this.player.setVelocity(flyVx, flyVy);
+      const body = this.player.body as Phaser.Physics.Arcade.Body;
       this.npc.setPosition(this.player.x, this.player.y - 30);
-      this.npc.setVelocity(flyVx, flyVy);
+      this.npc.setVelocity(body.velocity.x, body.velocity.y);
 
       if (
         !this.hasExitedBounds &&
@@ -424,28 +359,13 @@ class SkyFortressGameScene extends Phaser.Scene {
         this.npc.destroy();
         this.npc = null;
         this.isCarrying = false;
-        this.isExitingUpwardAfterRescue = true;
-        this.exitUpwardStartTime = this.time.now;
+        this.completeRescueAfterFloat();
       }
 
       return;
     }
 
-    if (!arrowsLocked) {
-      if (this.cursors?.left.isDown) {
-        this.player.setVelocityX(-speed);
-      } else if (this.cursors?.right.isDown) {
-        this.player.setVelocityX(speed);
-      }
-
-      if (this.cursors?.up.isDown) {
-        this.player.setVelocityY(-speed);
-      } else if (this.cursors?.down.isDown) {
-        this.player.setVelocityY(speed);
-      }
-    }
-
-    if (this.npc) {
+    if (this.npc && !this.isCarrying) {
       this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
 
       if (
@@ -519,54 +439,11 @@ class SkyFortressGameScene extends Phaser.Scene {
     );
   }
 
-  private getRescueDiagonalAscentVelocity(flySpeed: number): { vx: number; vy: number } {
-    if (!this.player) return { vx: 0, vy: -flySpeed };
-    const centerX = this.cameras.main.width / 2;
-    const centerY = this.cameras.main.height / 2;
-    const aimY = centerY - this.cameras.main.height * 0.42;
-    const dx = centerX - this.player.x;
-    const dy = aimY - this.player.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 1e-6) {
-      return { vx: 0, vy: -flySpeed };
-    }
-    return { vx: (dx / dist) * flySpeed, vy: (dy / dist) * flySpeed };
-  }
-
   private beginRescueCelebration(): void {
     this.cancelPendingDrownRestart();
     this.levelComplete = true;
     this.inVictorySequence = true;
     this.rescueAdvanceSeq = ++this.victoryAdvanceSeq;
-    const soundSeq = this.rescueAdvanceSeq;
-
-    const attachVictoryCompleteHandler = () => {
-      this.victorySound?.once(Phaser.Sound.Events.COMPLETE, () => {
-        if (soundSeq !== this.rescueAdvanceSeq) return;
-        this.completeRescueAfterFloat();
-      });
-    };
-
-    if (!this.victorySound) {
-      this.victorySound = this.sound.add('victory', { volume: 0.8 });
-    }
-
-    this.victorySound.off(Phaser.Sound.Events.COMPLETE);
-    if (this.victorySound.isPlaying) {
-      this.victorySound.stop();
-    }
-
-    this.sound.off(Phaser.Sound.Events.UNLOCKED);
-    if (this.sound.locked) {
-      this.sound.once(Phaser.Sound.Events.UNLOCKED, () => {
-        if (soundSeq !== this.rescueAdvanceSeq) return;
-        this.victorySound?.play();
-        attachVictoryCompleteHandler();
-      });
-    } else {
-      this.victorySound.play();
-      attachVictoryCompleteHandler();
-    }
   }
 
   private completeRescueAfterFloat(): void {
@@ -580,8 +457,6 @@ class SkyFortressGameScene extends Phaser.Scene {
       this.npc = null;
     }
     this.isCarrying = false;
-    this.isFloatingAfterRescue = false;
-    this.isReturningToCenterAfterRescue = false;
     this.hasExitedBounds = false;
 
     const cx = this.cameras.main.width / 2;
@@ -592,6 +467,9 @@ class SkyFortressGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.inVictorySequence = false;
     this.player?.setCollideWorldBounds(true);
+    if (this.player?.body) {
+      (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
+    }
 
     if (this.currentLevel < MAX_LEVEL) {
       this.nextLevel();
@@ -606,14 +484,8 @@ class SkyFortressGameScene extends Phaser.Scene {
     
     if (this.isPaused) {
       this.physics.pause();
-      if (this.victorySound?.isPlaying) {
-        this.victorySound.pause();
-      }
     } else {
       this.physics.resume();
-      if (this.victorySound?.isPaused) {
-        this.victorySound.resume();
-      }
     }
 
     if (this.onPauseStateChange) {
@@ -669,6 +541,8 @@ export default function SkyFortressGame() {
   const [saviorMessage, setSaviorMessage] = useState('');
   const [isArrowLockoutBubble, setIsArrowLockoutBubble] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isAnthemPlaying, setIsAnthemPlaying] = useState(false);
+  const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (!showSpeechBubble) return;
@@ -713,6 +587,32 @@ export default function SkyFortressGame() {
       return () => document.removeEventListener('click', handleClickOutside);
     }
   }, [isMenuOpen]);
+
+  useEffect(() => {
+    if (gameState !== 'complete') return;
+    const audio = new Audio('/audio/saviour.wav');
+    victoryAudioRef.current = audio;
+    setIsAnthemPlaying(true);
+    const finishPlayback = () => {
+      setIsAnthemPlaying(false);
+      if (victoryAudioRef.current === audio) {
+        victoryAudioRef.current = null;
+      }
+    };
+    audio.addEventListener('ended', finishPlayback);
+    audio.addEventListener('error', finishPlayback);
+    void audio.play().catch(() => finishPlayback());
+    return () => {
+      audio.removeEventListener('ended', finishPlayback);
+      audio.removeEventListener('error', finishPlayback);
+      audio.pause();
+      audio.currentTime = 0;
+      if (victoryAudioRef.current === audio) {
+        victoryAudioRef.current = null;
+      }
+      setIsAnthemPlaying(false);
+    };
+  }, [gameState]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -930,21 +830,29 @@ export default function SkyFortressGame() {
           completedPhrase="the Sky Fortress!"
           hearts={hearts}
           tagline="Continue to your reflection or play another run."
+          actionsDisabled={isAnthemPlaying}
+          disabledHoverMessage={VICTORY_LOCK_HOVER_MESSAGE}
           actions={
             <>
               <button
                 type="button"
-                onClick={() => router.push('/games/sky-fortress/reflection')}
-                className="flex-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-3 font-semibold text-white shadow-lg transition hover:from-emerald-500 hover:to-teal-500"
+                disabled={isAnthemPlaying}
+                onClick={() => {
+                  if (isAnthemPlaying) return;
+                  router.push('/games/sky-fortress/reflection');
+                }}
+                className="flex-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-3 font-semibold text-white shadow-lg transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Continue to reflection
               </button>
               <button
                 type="button"
+                disabled={isAnthemPlaying}
                 onClick={() => {
+                  if (isAnthemPlaying) return;
                   window.location.assign('/games/sky-fortress/play');
                 }}
-                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50"
+                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Play again
               </button>
