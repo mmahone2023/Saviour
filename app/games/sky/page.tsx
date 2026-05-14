@@ -41,7 +41,7 @@ export default function SkyGamePage() {
           </Link>
 
           <Link
-            href="/"
+            href="/landing"
             className="px-8 py-3 border-2 border-white/50 text-white font-semibold rounded-lg hover:bg-white/10 transition-all"
           >
             Back Home

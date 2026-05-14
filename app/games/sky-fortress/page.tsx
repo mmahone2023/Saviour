@@ -130,7 +130,7 @@ export default function SkyFortressPage() {
             🚀 Start Game
           </Link>
           <Link
-            href="/"
+            href="/landing"
             className="px-8 py-4 bg-white/30 hover:bg-white/50 text-white font-bold text-lg rounded-lg transition border-2 border-white/50"
           >
             Back Home
