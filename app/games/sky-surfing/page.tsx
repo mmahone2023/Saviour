@@ -26,10 +26,24 @@ export default function SkySurfingPage() {
           Air Surfing
         </h1>
 
-        <p className="text-cyan-100/90 max-w-md mb-8 text-lg">
+        <p className="text-cyan-100/90 max-w-md mb-6 text-lg">
           Strong winds are blowing characters across the sky! Surf through the air and intercept them before they
           drift off the edge. Each rescue earns one heart — save all five to complete the challenge.
         </p>
+
+        <div
+          role="alert"
+          className="max-w-lg w-full mb-8 rounded-xl border-2 border-amber-300/80 bg-amber-950/40 px-5 py-4 text-left shadow-lg backdrop-blur-sm"
+        >
+          <p className="text-sm font-bold uppercase tracking-wide text-amber-200 mb-2">Before you play</p>
+          <p className="text-amber-50/95 text-sm md:text-base leading-relaxed">
+            Each level asks you to save more people before you can advance. You must rescue{' '}
+            <strong className="text-white">1</strong>, then <strong className="text-white">2</strong>, then{' '}
+            <strong className="text-white">3</strong>, then <strong className="text-white">4</strong>, then{' '}
+            <strong className="text-white">5</strong> drifting characters (one wave per level). Pick everyone up, then
+            fly off the top of the screen to finish that level and earn a heart.
+          </p>
+        </div>
 
         <div className="flex gap-4">
           <Link

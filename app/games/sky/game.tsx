@@ -19,6 +19,7 @@ import {
   SKY_BASE_FAIL_MESSAGES,
   SKY_FAIL_FEEDBACK_MS,
 } from '@/app/games/sky-rescue-fail-bubbles';
+import { SAVIOUR_BACKGROUND_THEME_PATH, SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
 const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
@@ -603,6 +604,7 @@ export default function SkyGame() {
   const sceneRef = useRef<SkyGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
+  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
 
   const levelMessages: Record<number, string> = {
     1: 'You saved my life. Thank you so much!',
@@ -640,8 +642,37 @@ export default function SkyGame() {
   }, [isMenuOpen]);
 
   useEffect(() => {
+    if (gameState !== 'playing') {
+      backgroundMusicRef.current?.pause();
+      return;
+    }
+    let audio = backgroundMusicRef.current;
+    if (!audio) {
+      audio = new Audio(SAVIOUR_BACKGROUND_THEME_PATH);
+      audio.loop = true;
+      backgroundMusicRef.current = audio;
+    }
+    if (isPaused) {
+      audio.pause();
+    } else {
+      void audio.play().catch(() => {});
+    }
+  }, [gameState, isPaused]);
+
+  useEffect(() => {
+    return () => {
+      const bg = backgroundMusicRef.current;
+      if (bg) {
+        bg.pause();
+        bg.currentTime = 0;
+        backgroundMusicRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (gameState !== 'complete') return;
-    const audio = new Audio('/audio/saviour.wav');
+    const audio = new Audio(SAVIOUR_VICTORY_ANTHEM_PATH);
     victoryAudioRef.current = audio;
     setIsAnthemPlaying(true);
     const finishPlayback = () => {

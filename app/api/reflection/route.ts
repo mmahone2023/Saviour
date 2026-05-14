@@ -6,6 +6,7 @@ const bodySchema = z.object({
   email: z.string().max(320).optional(),
   phone: z.string().max(32).optional(),
   message: z.string().min(1).max(2000),
+  source: z.enum(['sky-fortress-reflection', 'sky-surfing-reflection']).optional(),
 });
 
 const REFLECTION_COLLECTION = 'reflection_submissions';
@@ -25,7 +26,7 @@ function normalizePhone(value: string | undefined): string | undefined {
   return `+${digits}`;
 }
 
-async function sendEmailResend(to: string, text: string): Promise<{ ok: boolean; error?: string }> {
+async function sendEmailResend(to: string, text: string, subject: string): Promise<{ ok: boolean; error?: string }> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM_EMAIL;
   if (!apiKey || !from) {
@@ -41,7 +42,7 @@ async function sendEmailResend(to: string, text: string): Promise<{ ok: boolean;
     body: JSON.stringify({
       from,
       to: [to],
-      subject: 'Saviour — Sky Fortress reflection',
+      subject,
       text,
     }),
   });
@@ -124,6 +125,9 @@ export async function POST(req: NextRequest) {
   const email = normalizeEmail(parsed.data.email);
   const phone = normalizePhone(parsed.data.phone);
   const message = parsed.data.message.trim();
+  const source = parsed.data.source ?? 'sky-fortress-reflection';
+  const emailSubject =
+    source === 'sky-surfing-reflection' ? 'Saviour — Air Surfing reflection' : 'Saviour — Sky Fortress reflection';
 
   if (!email && !phone) {
     return NextResponse.json(
@@ -142,7 +146,7 @@ export async function POST(req: NextRequest) {
   const results: { channel: 'email' | 'sms'; ok: boolean; error?: string }[] = [];
 
   if (email) {
-    results.push({ channel: 'email', ...(await sendEmailResend(email, message)) });
+    results.push({ channel: 'email', ...(await sendEmailResend(email, message, emailSubject)) });
   }
   if (phone) {
     results.push({ channel: 'sms', ...(await sendSmsTwilio(phone, message)) });
@@ -152,7 +156,7 @@ export async function POST(req: NextRequest) {
   const sendErrors = results.filter((r) => !r.ok).map((r) => `${r.channel}: ${r.error || 'failed'}`);
 
   const persist = await persistReflection({
-    source: 'sky-fortress-reflection',
+    source,
     ...(email ? { email } : {}),
     ...(phone ? { phone } : {}),
     message,

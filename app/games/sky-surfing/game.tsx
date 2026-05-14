@@ -19,6 +19,7 @@ import {
   SKY_FAIL_FEEDBACK_MS,
   SKY_SURFING_FAIL_MESSAGES,
 } from '@/app/games/sky-rescue-fail-bubbles';
+import { SAVIOUR_BACKGROUND_THEME_PATH, SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
 const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
@@ -41,12 +42,10 @@ class SkySurfingGameScene extends Phaser.Scene {
   private drownFailTimer: Phaser.Time.TimerEvent | null = null;
   private inVictorySequence: boolean = false;
   private failBubbleLayer: Phaser.GameObjects.Container | null = null;
-  private victoryAdvanceSeq: number = 0;
-  private rescueAdvanceSeq: number = 0;
-  private lastVictoryHandledSeq: number = -999;
+  /** True after the last NPC of the wave is saved until fly-off completion runs (replaces fragile seq guards). */
+  private flyOffActive: boolean = false;
   private currentSpeed: number = 90;
   private isPaused: boolean = false;
-  private hasExitedBounds: boolean = false;
   private pauseText: Phaser.GameObjects.Text | null = null;
   private npcSpawnTime: number = 0;
   private clouds: Phaser.GameObjects.Container[] = [];
@@ -94,7 +93,7 @@ class SkySurfingGameScene extends Phaser.Scene {
 
     this.currentLevel = 1;
     this.hearts = 0;
-    this.lastVictoryHandledSeq = -999;
+    this.flyOffActive = false;
     this.inVictorySequence = false;
     this.drownFailTimer = null;
     this.failBubbleLayer = null;
@@ -303,8 +302,8 @@ class SkySurfingGameScene extends Phaser.Scene {
     this.levelComplete = false;
     this.isCarrying = false;
     this.npcHasBeenTouched = false;
-    this.hasExitedBounds = false;
     this.inVictorySequence = false;
+    this.flyOffActive = false;
 
     this.spawnOneNPC();
 
@@ -436,12 +435,11 @@ class SkySurfingGameScene extends Phaser.Scene {
       carried.setVelocity(body.velocity.x, body.velocity.y);
     }
 
-    // If all collected → Saviour flies up; heart and HUD update only after clearing the top (see completeRescueAfterFloat).
+    // If all collected → Saviour flies up; heart and wave reset run in completeRescueAfterFloat (flyOffActive gates).
     if (this.allCollected) {
       const v = this.cameras.main.worldView;
       const pad = 40;
-      if (!this.hasExitedBounds && this.player.y < v.y - pad) {
-        this.hasExitedBounds = true;
+      if (this.flyOffActive && this.player.y < v.y - pad) {
         this.completeRescueAfterFloat();
       }
       return;
@@ -515,7 +513,6 @@ class SkySurfingGameScene extends Phaser.Scene {
           if (this.npcsSavedThisLevel >= this.npcsToSaveThisLevel) {
             this.allCollected = true;
             this.isCarrying = true;
-            this.hasExitedBounds = false;
             this.player.setCollideWorldBounds(false);
 
             this.beginRescueCelebration();
@@ -530,23 +527,26 @@ class SkySurfingGameScene extends Phaser.Scene {
     this.cancelPendingDrownRestart();
     this.levelComplete = true;
     this.inVictorySequence = true;
-    this.rescueAdvanceSeq = ++this.victoryAdvanceSeq;
+    this.flyOffActive = true;
   }
 
   private completeRescueAfterFloat(): void {
-    const seq = this.rescueAdvanceSeq;
-    if (seq !== this.victoryAdvanceSeq) return;
-    if (this.lastVictoryHandledSeq === seq) return;
-    this.lastVictoryHandledSeq = seq;
+    if (!this.flyOffActive) {
+      return;
+    }
+    this.flyOffActive = false;
 
     for (const c of this.carriedNpcs) {
-      if (c && c.active) c.destroy();
+      if (c && c.active) {
+        c.destroy(true);
+      }
     }
     this.carriedNpcs = [];
+    destroyTaggedRescueNpcs(this, this.player);
+
     this.npc = null;
     this.isCarrying = false;
     this.allCollected = false;
-    this.hasExitedBounds = false;
 
     this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
     if (this.onHeartEarned) {
@@ -584,6 +584,7 @@ class SkySurfingGameScene extends Phaser.Scene {
     this.carriedNpcs = [];
     this.allCollected = false;
     this.isCarrying = false;
+    this.flyOffActive = false;
     this.startLevelWave();
   }
 
@@ -642,6 +643,7 @@ export default function SkySurfingGame() {
   const sceneRef = useRef<SkySurfingGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
+  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
 
   const levelMessages: Record<number, string> = {
     1: 'You caught me before the wind took me away!',
@@ -679,8 +681,37 @@ export default function SkySurfingGame() {
   }, [isMenuOpen]);
 
   useEffect(() => {
-    if (gameState !== 'complete') return;
-    const audio = new Audio('/audio/saviour.wav');
+    if (gameState !== 'playing') {
+      backgroundMusicRef.current?.pause();
+      return;
+    }
+    let audio = backgroundMusicRef.current;
+    if (!audio) {
+      audio = new Audio(SAVIOUR_BACKGROUND_THEME_PATH);
+      audio.loop = true;
+      backgroundMusicRef.current = audio;
+    }
+    if (isPaused) {
+      audio.pause();
+    } else {
+      void audio.play().catch(() => {});
+    }
+  }, [gameState, isPaused]);
+
+  useEffect(() => {
+    return () => {
+      const bg = backgroundMusicRef.current;
+      if (bg) {
+        bg.pause();
+        bg.currentTime = 0;
+        backgroundMusicRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (gameState !== 'complete' || hearts < 5) return;
+    const audio = new Audio(SAVIOUR_VICTORY_ANTHEM_PATH);
     victoryAudioRef.current = audio;
     setIsAnthemPlaying(true);
     const finishPlayback = () => {
@@ -702,7 +733,7 @@ export default function SkySurfingGame() {
       }
       setIsAnthemPlaying(false);
     };
-  }, [gameState]);
+  }, [gameState, hearts]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -735,12 +766,14 @@ export default function SkySurfingGame() {
 
         scene.onHeartEarned = (newHearts: number, completedLevel: number) => {
           setHearts(newHearts);
-          setSpeechBubbleIsArrowLockout(false);
-          setSpeechMessage(levelMessages[completedLevel] || '');
-          setShowSpeechBubble(true);
+          setLevel(completedLevel);
+          setShowSpeechBubble(false);
         };
 
         scene.onGameComplete = () => {
+          setHearts(5);
+          setLevel(5);
+          setShowSpeechBubble(false);
           setGameState('complete');
         };
 
@@ -922,7 +955,11 @@ export default function SkySurfingGame() {
         <SkyGameCompletionCard
           completedPhrase="Air Surfing!"
           hearts={hearts}
-          tagline="You've mastered the winds!"
+          tagline={
+            <span>
+              You&apos;ve mastered the winds! {levelMessages[5]} Choose home or continue to your reflection.
+            </span>
+          }
           actionsDisabled={isAnthemPlaying}
           disabledHoverMessage={VICTORY_LOCK_HOVER_MESSAGE}
           actions={
@@ -932,22 +969,22 @@ export default function SkySurfingGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  window.location.assign('/games/sky-surfing/play');
+                  router.push('/');
                 }}
-                className="flex-1 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3 text-center font-semibold text-white transition hover:from-cyan-400 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Ride Again
+                Home
               </button>
               <button
                 type="button"
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/');
+                  router.push('/games/sky-surfing/reflection');
                 }}
-                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg bg-gradient-to-r from-sky-600 to-cyan-700 px-6 py-3 text-center font-semibold text-white shadow-lg transition hover:from-sky-500 hover:to-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Back Home
+                Reflection
               </button>
             </>
           }
