@@ -421,6 +421,11 @@ class SkySurfingGameScene extends Phaser.Scene {
       this.player.setVelocityY(speed);
     }
 
+    // After the last rescue, Saviour rises automatically (same beat as other sky games' fly-off).
+    if (this.allCollected) {
+      this.player.setVelocityY(-speed);
+    }
+
     // Position carried NPCs around Saviour
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     for (let i = 0; i < this.carriedNpcs.length; i++) {
@@ -431,20 +436,12 @@ class SkySurfingGameScene extends Phaser.Scene {
       carried.setVelocity(body.velocity.x, body.velocity.y);
     }
 
-    // If all collected → player flies upward under their own control
+    // If all collected → Saviour flies up; heart and HUD update only after clearing the top (see completeRescueAfterFloat).
     if (this.allCollected) {
-      if (
-        !this.hasExitedBounds &&
-        this.isCompletelyOutsideCanvas(this.player)
-      ) {
+      const v = this.cameras.main.worldView;
+      const pad = 40;
+      if (!this.hasExitedBounds && this.player.y < v.y - pad) {
         this.hasExitedBounds = true;
-        for (const c of this.carriedNpcs) {
-          if (c && c.active) c.destroy();
-        }
-        this.carriedNpcs = [];
-        this.npc = null;
-        this.isCarrying = false;
-        this.allCollected = false;
         this.completeRescueAfterFloat();
       }
       return;
@@ -519,7 +516,7 @@ class SkySurfingGameScene extends Phaser.Scene {
             this.allCollected = true;
             this.isCarrying = true;
             this.hasExitedBounds = false;
-            (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
+            this.player.setCollideWorldBounds(false);
 
             this.beginRescueCelebration();
           }
@@ -552,17 +549,14 @@ class SkySurfingGameScene extends Phaser.Scene {
     if (this.lastVictoryHandledSeq === seq) return;
     this.lastVictoryHandledSeq = seq;
 
-    this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
-    if (this.onHeartEarned) {
-      this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+    for (const c of this.carriedNpcs) {
+      if (c && c.active) c.destroy();
     }
-    if (this.hearts === 1) {
-      notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
-    }
-
+    this.carriedNpcs = [];
+    this.npc = null;
     this.isCarrying = false;
-    this.hasExitedBounds = false;
     this.allCollected = false;
+    this.hasExitedBounds = false;
 
     const cx = this.cameras.main.width / 2;
     const resetY = this.cameras.main.height * 0.75;
@@ -576,6 +570,14 @@ class SkySurfingGameScene extends Phaser.Scene {
     if (this.player?.body) {
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       body.checkCollision.up = true;
+    }
+
+    this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+    if (this.onHeartEarned) {
+      this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+    }
+    if (this.hearts === 1) {
+      notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
     }
 
     if (this.currentLevel < MAX_LEVEL) {
