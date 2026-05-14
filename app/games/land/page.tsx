@@ -38,7 +38,7 @@ export default function LandGamePage() {
           </Link>
                    
           <Link
-            href="/"            className="px-8 py-3 border-2 border-emerald-400/50 text-emerald-300 font-semibold rounded-lg hover:bg-emerald-400/10 transition-all"
+            href="/landing"            className="px-8 py-3 border-2 border-emerald-400/50 text-emerald-300 font-semibold rounded-lg hover:bg-emerald-400/10 transition-all"
           >
             Back Home
           </Link>

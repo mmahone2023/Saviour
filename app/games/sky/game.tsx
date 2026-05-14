@@ -839,7 +839,7 @@ export default function SkyGame() {
                 </Link>
 
                 <Link
-                  href="/"
+                  href="/landing"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
                   🏠 Back to Home

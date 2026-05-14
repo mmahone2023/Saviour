@@ -184,7 +184,7 @@ export default function SkyFortressReflectionPage() {
                 {status === 'submitting' ? 'Sending…' : 'Send reflection'}
               </button>
               <Link
-                href="/"
+                href="/landing"
                 className="flex-1 rounded-lg border border-white/30 bg-white/5 px-6 py-3 text-center font-semibold text-white hover:bg-white/10 transition"
               >
                 Back Home
@@ -206,7 +206,7 @@ export default function SkyFortressReflectionPage() {
         </Card>
 
         <p className="text-center text-sm text-white/50">
-          <Link href="/" className="text-indigo-300 hover:underline">
+          <Link href="/landing" className="text-indigo-300 hover:underline">
             Back to home
           </Link>
         </p>

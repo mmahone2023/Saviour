@@ -56,7 +56,7 @@ export default function CityGamePage() {
 
           {/* Back Button */}
           <Link
-            href="/"
+            href="/landing"
             className="px-10 py-4 border-2 border-orange-400/50 text-orange-300 font-semibold rounded-xl 
             hover:bg-orange-400/10 
             hover:shadow-[0_0_20px_rgba(255,140,0,0.6)] 
