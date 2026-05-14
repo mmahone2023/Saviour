@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import * as Phaser from 'phaser';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import * as Phaser from 'phaser';
 import { Card } from '@/components/ui/card';
 import { SkyGameCompletionCard } from '@/components/sky-game-completion-card';
 import {
@@ -16,8 +16,8 @@ import {
 import { destroyTaggedRescueNpcs, SKY_RESCUE_NPC_DATA_KEY } from '@/app/games/sky-rescue-single-npc';
 import {
   mountSkyFailBubbleMessages,
-  SKY_CITY_FAIL_MESSAGES,
   SKY_FAIL_FEEDBACK_MS,
+  SKY_SURFING_FAIL_MESSAGES,
 } from '@/app/games/sky-rescue-fail-bubbles';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
@@ -25,8 +25,7 @@ const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you
 
 const MAX_LEVEL = 5;
 
-// Sky City Game Scene
-class SkyCityGameScene extends Phaser.Scene {
+class SkySurfingGameScene extends Phaser.Scene {
   private player: Phaser.Physics.Arcade.Sprite | null = null;
   private npc: Phaser.Physics.Arcade.Sprite | null = null;
   private particles: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
@@ -38,7 +37,6 @@ class SkyCityGameScene extends Phaser.Scene {
   private isCarrying: boolean = false;
   private baseVelocity: { x: number; y: number } = { x: 0, y: 0 };
   private npcHasBeenTouched: boolean = false;
-  /** Avoids stacking multiple scene.restart timers while the NPC stays past the fail line. */
   private drownRestartScheduled: boolean = false;
   private drownFailTimer: Phaser.Time.TimerEvent | null = null;
   private inVictorySequence: boolean = false;
@@ -46,27 +44,36 @@ class SkyCityGameScene extends Phaser.Scene {
   private victoryAdvanceSeq: number = 0;
   private rescueAdvanceSeq: number = 0;
   private lastVictoryHandledSeq: number = -999;
-  private currentSpeed: number = 60;
+  private currentSpeed: number = 90;
   private isPaused: boolean = false;
   private hasExitedBounds: boolean = false;
+  private pauseText: Phaser.GameObjects.Text | null = null;
+  private npcSpawnTime: number = 0;
+  private clouds: Phaser.GameObjects.Container[] = [];
+  private npcsToSaveThisLevel: number = 1;
+  private npcsSavedThisLevel: number = 0;
+  private npcsSpawnedThisLevel: number = 0;
+  private spawnTimer: Phaser.Time.TimerEvent | null = null;
+  private carriedNpcs: Phaser.Physics.Arcade.Sprite[] = [];
+  private allCollected: boolean = false;
 
   private levelMessages: Record<number, string> = {
-    1: 'Thank you for saving me from the rooftop!',
-    2: 'You caught me mid-fall! You are a true hero!',
-    3: 'I thought I was a goner! You are amazing!',
-    4: 'You have incredible reflexes!',
-    5: 'You are the greatest hero in the sky city!',
+    1: 'You caught me before the wind took me away!',
+    2: 'I was swept off my feet — literally! Thank you!',
+    3: "The wind almost carried me off the edge! You're my hero!",
+    4: 'I thought I was gone for good! You saved me!',
+    5: 'You are the ultimate air surfer and rescuer!',
   };
-  
+
   private npcList: Array<{
     name: string;
     description: string;
   }> = [
-    { name: '👨‍💼 Worker', description: 'Save the worker falling from the office building' },
-    { name: '👩‍💼 Executive', description: 'Catch the executive falling from the tower' },
-    { name: '🧑‍🔧 Technician', description: 'Help the technician falling from the tech building' },
-    { name: '👨‍⚕️ Doctor', description: 'Save the doctor from the hospital rooftop' },
-    { name: '👨‍🎓 Professor', description: 'Rescue the professor from the university' },
+    { name: '🪁 Kite Flyer', description: 'Save the kite flyer swept by the wind' },
+    { name: '🎈 Balloon Kid', description: 'Rescue the child carried by balloons' },
+    { name: '🦜 Parrot Keeper', description: 'Help the parrot keeper blown off course' },
+    { name: '🪂 Parachutist', description: 'Save the parachutist caught in a gust' },
+    { name: '🌬️ Wind Dancer', description: 'Rescue the wind dancer drifting away' },
   ];
 
   onHeartEarned: ((hearts: number, level: number) => void) | null = null;
@@ -76,14 +83,13 @@ class SkyCityGameScene extends Phaser.Scene {
   private skyArrowChallenge: SkyArrowChallengeState = createSkyArrowChallengeState();
 
   constructor() {
-    super('SkyCityGameScene');
+    super('SkySurfingGameScene');
   }
 
   preload() {}
 
   create() {
-    // Initialize speed from registry
-    const roundData = this.registry.get('skyCityRound') || { roundNumber: 1, baseSpeed: 60 };
+    const roundData = this.registry.get('skySurfingRound') || { roundNumber: 1, baseSpeed: 90 };
     this.currentSpeed = roundData.baseSpeed;
 
     this.currentLevel = 1;
@@ -92,16 +98,100 @@ class SkyCityGameScene extends Phaser.Scene {
     this.inVictorySequence = false;
     this.drownFailTimer = null;
     this.failBubbleLayer = null;
+    this.npcsToSaveThisLevel = 1;
+    this.npcsSavedThisLevel = 0;
 
-    // Set camera background
-    this.cameras.main.setBackgroundColor(0x87ceeb);
+    this.cameras.main.setBackgroundColor(0x6ec6ff);
 
-    // Create sky city buildings background
-    this.createBuildings();
+    this.createBackground();
+    this.createPlayerTexture();
 
-    // Create a more human-like player silhouette (head, torso, limbs, and cape).
+    this.player = this.physics.add.sprite(100, 300, 'player');
+    this.player.setCollideWorldBounds(true);
+
+    try {
+      this.particles = this.add.particles(0xffd700);
+      this.particles.stop();
+    } catch {
+      this.particles = null;
+    }
+
+    this.createWindEffect();
+
+    this.cursors = this.input.keyboard?.createCursorKeys() || null;
+
+    this.input.keyboard?.on('keydown-SPACE', () => {
+      this.togglePause();
+    });
+
+    this.pauseText = this.add.text(400, 300, 'PAUSED\nPress SPACE to resume', {
+      fontSize: '48px',
+      color: '#ffffff',
+      fontStyle: 'bold',
+      align: 'center',
+      backgroundColor: '#000000',
+      padding: { x: 20, y: 20 },
+    });
+    this.pauseText.setOrigin(0.5);
+    this.pauseText.setDepth(100);
+    this.pauseText.setVisible(false);
+
+    this.skyArrowChallenge = createSkyArrowChallengeState();
+
+    this.createNPC();
+  }
+
+  private createBackground() {
+    const g = this.add.graphics();
+    g.fillStyle(0x87ceeb, 1);
+    g.fillRect(0, 0, 800, 150);
+    g.fillStyle(0x7ec8e3, 1);
+    g.fillRect(0, 150, 800, 150);
+    g.fillStyle(0x6bb7d8, 1);
+    g.fillRect(0, 300, 800, 150);
+    g.fillStyle(0x5aa8cc, 1);
+    g.fillRect(0, 450, 800, 150);
+    g.setDepth(-20);
+
+    this.clouds = [];
+    for (let i = 0; i < 10; i++) {
+      const cx = Phaser.Math.Between(0, 800);
+      const cy = Phaser.Math.Between(30, 560);
+      const scale = Phaser.Math.FloatBetween(0.6, 1.3);
+      const alpha = Phaser.Math.FloatBetween(0.35, 0.6);
+
+      const cloudGfx = this.add.graphics();
+      cloudGfx.fillStyle(0xffffff, alpha);
+      cloudGfx.fillRoundedRect(-35 * scale, -12 * scale, 70 * scale, 24 * scale, 12 * scale);
+      cloudGfx.fillRoundedRect(-45 * scale, -4 * scale, 40 * scale, 18 * scale, 9 * scale);
+      cloudGfx.fillRoundedRect(10 * scale, -4 * scale, 40 * scale, 18 * scale, 9 * scale);
+      cloudGfx.fillRoundedRect(-10 * scale, -16 * scale, 30 * scale, 16 * scale, 8 * scale);
+      cloudGfx.fillCircle(20 * scale, -6 * scale, 10 * scale);
+      cloudGfx.fillCircle(-20 * scale, -2 * scale, 8 * scale);
+
+      const container = this.add.container(cx, cy, [cloudGfx]);
+      container.setDepth(-15);
+      this.clouds.push(container);
+    }
+  }
+
+  private windStreaks: Phaser.GameObjects.Rectangle[] = [];
+
+  private createWindEffect() {
+    this.windStreaks = [];
+    for (let i = 0; i < 15; i++) {
+      const x = Phaser.Math.Between(0, 800);
+      const y = Phaser.Math.Between(0, 600);
+      const w = Phaser.Math.Between(20, 60);
+      const streak = this.add.rectangle(x, y, w, 1.5, 0xffffff, 0.3);
+      streak.setDepth(-5);
+      streak.setData('speed', Phaser.Math.Between(3, 7));
+      this.windStreaks.push(streak);
+    }
+  }
+
+  private createPlayerTexture() {
     const playerGraphics = this.make.graphics({ x: 0, y: 0 }, false);
-    // Cape (warm red-orange, like the home-page hero)
     playerGraphics.fillStyle(0xe0432b, 1);
     playerGraphics.beginPath();
     playerGraphics.moveTo(18, 12);
@@ -110,11 +200,9 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.closePath();
     playerGraphics.fillPath();
 
-    // Torso (golden suit)
     playerGraphics.fillStyle(0xf2b53a, 1);
     playerGraphics.fillRoundedRect(14, 15, 8, 14, 3);
 
-    // Chest emblem with "S"
     playerGraphics.fillStyle(0xb6251d, 1);
     playerGraphics.fillCircle(18, 22, 4);
     playerGraphics.fillStyle(0xfde68a, 1);
@@ -124,11 +212,9 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.fillRect(16, 20, 1.2, 3);
     playerGraphics.fillRect(18.8, 22, 1.2, 3);
 
-    // Head + face
     playerGraphics.fillStyle(0xf2b48c, 1);
     playerGraphics.fillCircle(18, 9.5, 4.5);
 
-    // Helmet with side horns (home-page inspired)
     playerGraphics.fillStyle(0xd78a21, 1);
     playerGraphics.beginPath();
     playerGraphics.moveTo(13, 10);
@@ -138,15 +224,13 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.lineTo(23, 10);
     playerGraphics.closePath();
     playerGraphics.fillPath();
-    // Horns
     playerGraphics.fillStyle(0xf6d365, 1);
     playerGraphics.fillTriangle(14, 5.5, 12.4, 1.2, 14.8, 5.4);
     playerGraphics.fillTriangle(22, 5.5, 23.6, 1.2, 21.2, 5.4);
 
-    // Human-like facial features
     playerGraphics.fillStyle(0x3f2a1f, 1);
-    playerGraphics.fillRect(15.2, 8.3, 1.7, 0.55); // left brow
-    playerGraphics.fillRect(19.1, 8.3, 1.7, 0.55); // right brow
+    playerGraphics.fillRect(15.2, 8.3, 1.7, 0.55);
+    playerGraphics.fillRect(19.1, 8.3, 1.7, 0.55);
     playerGraphics.fillStyle(0xffffff, 1);
     playerGraphics.fillCircle(16.2, 9.5, 0.75);
     playerGraphics.fillCircle(19.8, 9.5, 0.75);
@@ -156,15 +240,14 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.lineStyle(1, 0x8b5a3c);
     playerGraphics.beginPath();
     playerGraphics.moveTo(18, 10);
-    playerGraphics.lineTo(17.8, 11.2); // nose
+    playerGraphics.lineTo(17.8, 11.2);
     playerGraphics.strokePath();
     playerGraphics.lineStyle(1, 0x7a2f22);
     playerGraphics.beginPath();
     playerGraphics.moveTo(16.6, 12.1);
-    playerGraphics.lineTo(19.4, 12.1); // mouth
+    playerGraphics.lineTo(19.4, 12.1);
     playerGraphics.strokePath();
 
-    // Arms
     playerGraphics.lineStyle(2, 0xf2b53a);
     playerGraphics.beginPath();
     playerGraphics.moveTo(14, 19);
@@ -175,7 +258,6 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.lineTo(27, 25);
     playerGraphics.strokePath();
 
-    // Legs
     playerGraphics.lineStyle(2, 0xd98b24);
     playerGraphics.beginPath();
     playerGraphics.moveTo(16, 29);
@@ -186,55 +268,8 @@ class SkyCityGameScene extends Phaser.Scene {
     playerGraphics.lineTo(22, 38);
     playerGraphics.strokePath();
 
-    playerGraphics.generateTexture('playerTex', 36, 42);
+    playerGraphics.generateTexture('player', 36, 42);
     playerGraphics.destroy();
-
-    this.player = this.physics.add.sprite(400, 300, 'playerTex');
-    this.player.setCollideWorldBounds(true);
-    (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
-
-    // Particle emitter
-    this.particles = this.add.particles(0xffd700);
-    this.particles.stop();
-
-    // Input
-    this.cursors = this.input.keyboard?.createCursorKeys() || null;
-
-    // Add space key for pause
-    this.input.keyboard?.on('keydown-SPACE', () => {
-      this.togglePause();
-    });
-
-    this.skyArrowChallenge = createSkyArrowChallengeState();
-
-    // Create first NPC
-    this.createNPC();
-  }
-
-  createBuildings() {
-    // Create simple buildings
-    const building1 = this.add.rectangle(150, 250, 80, 200, 0x4a4a4a);
-    building1.setDepth(-10);
-    
-    const building2 = this.add.rectangle(400, 150, 100, 300, 0x5a5a5a);
-    building2.setDepth(-10);
-    
-    const building3 = this.add.rectangle(650, 200, 90, 250, 0x6a6a6a);
-    building3.setDepth(-10);
-
-    // Add windows to buildings
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 6; j++) {
-        const window = this.add.rectangle(
-          150 + i * 250 - 25 + (i % 2) * 50,
-          200 + j * 40,
-          15,
-          15,
-          0xffff99
-        );
-        window.setDepth(-9);
-      }
-    }
   }
 
   private cancelPendingDrownRestart(): void {
@@ -249,56 +284,94 @@ class SkyCityGameScene extends Phaser.Scene {
     this.drownRestartScheduled = false;
   }
 
-  createNPC() {
+  private startLevelWave() {
+    this.cancelPendingDrownRestart();
     destroyTaggedRescueNpcs(this, this.player);
     if (this.npc) {
       this.npc.destroy();
       this.npc = null;
     }
-    this.cancelPendingDrownRestart();
+    if (this.spawnTimer) {
+      this.time.removeEvent(this.spawnTimer);
+      this.spawnTimer = null;
+    }
 
-    // Get round data to vary spawn position
-    const roundData = this.registry.get('skyCityRound') || { roundNumber: 1, baseSpeed: 60 };
-    const roundNumber = roundData.roundNumber;
-    
-    // Vary x position based on round
-    const xPositions = [150, 400, 650, 250, 550];
-    const buildingX = xPositions[Math.min(MAX_LEVEL, this.currentLevel) - 1];
-    const lvl = Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
-    const npcTexKey = `npcCity_lv_${lvl}`;
-
-    // Create NPC texture first
-    const npcGraphicsCity = this.make.graphics({ x: 0, y: 0 }, false);
-    npcGraphicsCity.fillStyle(0xff6347, 1);
-    npcGraphicsCity.fillCircle(15, 15, 8);
-    npcGraphicsCity.fillStyle(0xff7f50, 1);
-    npcGraphicsCity.fillCircle(15, 8, 5);
-    npcGraphicsCity.generateTexture(npcTexKey, 30, 30);
-    npcGraphicsCity.destroy();
-
-    // Start NPC at building height
-    this.npc = this.physics.add.sprite(buildingX, 80, npcTexKey);
-    
-    // Calculate falling velocity (almost vertical)
-    const angle = 5;
-    const angleRad = angle * Math.PI / 180;
-    const speed = this.currentSpeed;
-    
-    const direction = this.currentLevel % 2 === 1 ? 1 : -1;
-    const vx = speed * Math.sin(angleRad) * direction;
-    const vy = speed * Math.cos(angleRad);
-    
-    this.npc.setVelocity(vx, vy);
-    this.baseVelocity = { x: vx, y: vy };
-    this.npc.setCollideWorldBounds(false);
-    this.npc.setDepth(10);
-    this.npc.setData(SKY_RESCUE_NPC_DATA_KEY, true);
-
-    this.helpRadius = 100;
+    this.npcsSavedThisLevel = 0;
+    this.npcsSpawnedThisLevel = 0;
+    this.carriedNpcs = [];
+    this.allCollected = false;
     this.levelComplete = false;
     this.isCarrying = false;
     this.npcHasBeenTouched = false;
     this.hasExitedBounds = false;
+    this.inVictorySequence = false;
+
+    this.spawnOneNPC();
+
+    if (this.npcsToSaveThisLevel > 1) {
+      this.spawnTimer = this.time.addEvent({
+        delay: 2000,
+        callback: () => {
+          if (this.npcsSpawnedThisLevel < this.npcsToSaveThisLevel) {
+            this.spawnOneNPC();
+          }
+        },
+        repeat: this.npcsToSaveThisLevel - 2,
+      });
+    }
+  }
+
+  private spawnOneNPC() {
+    const lvl = Math.min(MAX_LEVEL, Math.max(1, this.currentLevel));
+    const npcTexKey = `npcSurfing_${lvl}_${this.npcsSpawnedThisLevel}_${Date.now()}`;
+
+    const npcGraphics = this.make.graphics({ x: 0, y: 0 }, false);
+    npcGraphics.fillStyle(0xff6347, 1);
+    npcGraphics.fillCircle(15, 15, 8);
+    npcGraphics.fillStyle(0xff7f50, 1);
+    npcGraphics.fillCircle(15, 8, 5);
+    npcGraphics.generateTexture(npcTexKey, 30, 30);
+    npcGraphics.destroy();
+
+    const spawnX = Phaser.Math.Between(750, 850);
+    const spawnY = Phaser.Math.Between(80, 520);
+
+    const sprite = this.physics.add.sprite(spawnX, spawnY, npcTexKey);
+
+    const speed = this.currentSpeed + (lvl - 1) * 12;
+    const windAngleDeg = Phaser.Math.Between(-15, 15);
+    const angleRad = windAngleDeg * Math.PI / 180;
+
+    const vx = -speed * Math.cos(angleRad);
+    const vy = speed * Math.sin(angleRad);
+
+    sprite.setVelocity(vx, vy);
+    sprite.setCollideWorldBounds(false);
+    sprite.setDepth(10);
+    sprite.setData(SKY_RESCUE_NPC_DATA_KEY, true);
+    sprite.setData('baseVx', vx);
+    sprite.setData('baseVy', vy);
+    sprite.setData('spawnTime', this.time.now);
+    sprite.setData('touched', false);
+
+    this.npcsSpawnedThisLevel += 1;
+
+    if (!this.npc) {
+      this.npc = sprite;
+      this.baseVelocity = { x: vx, y: vy };
+      this.npcSpawnTime = this.time.now;
+      this.npcHasBeenTouched = false;
+    }
+  }
+
+  createNPC() {
+    this.startLevelWave();
+  }
+
+  private updatePauseText() {
+    if (this.pauseText) {
+      this.pauseText.setVisible(true);
+    }
   }
 
   update() {
@@ -317,7 +390,23 @@ class SkyCityGameScene extends Phaser.Scene {
       return;
     }
 
-    const speed = 200;
+    for (const cloud of this.clouds) {
+      cloud.x -= 0.4;
+      if (cloud.x < -100) {
+        cloud.x = 900;
+        cloud.y = Phaser.Math.Between(30, 560);
+      }
+    }
+
+    for (const streak of this.windStreaks) {
+      streak.x -= streak.getData('speed') as number;
+      if (streak.x < -70) {
+        streak.x = 870;
+        streak.y = Phaser.Math.Between(0, 600);
+      }
+    }
+
+    const speed = 300;
     this.player.setVelocity(0);
 
     if (this.cursors?.left.isDown) {
@@ -332,38 +421,68 @@ class SkyCityGameScene extends Phaser.Scene {
       this.player.setVelocityY(speed);
     }
 
-    if (this.isCarrying && this.npc) {
-      const body = this.player.body as Phaser.Physics.Arcade.Body;
-      this.npc.setPosition(this.player.x, this.player.y - 30);
-      this.npc.setVelocity(body.velocity.x, body.velocity.y);
+    // Position carried NPCs around Saviour
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    for (let i = 0; i < this.carriedNpcs.length; i++) {
+      const carried = this.carriedNpcs[i];
+      if (!carried || !carried.active) continue;
+      const offsetY = -30 - i * 18;
+      carried.setPosition(this.player.x, this.player.y + offsetY);
+      carried.setVelocity(body.velocity.x, body.velocity.y);
+    }
 
+    // If all collected → player flies upward under their own control
+    if (this.allCollected) {
       if (
         !this.hasExitedBounds &&
         this.isCompletelyOutsideCanvas(this.player)
       ) {
         this.hasExitedBounds = true;
-        this.npc.destroy();
+        for (const c of this.carriedNpcs) {
+          if (c && c.active) c.destroy();
+        }
+        this.carriedNpcs = [];
         this.npc = null;
         this.isCarrying = false;
+        this.allCollected = false;
         this.completeRescueAfterFloat();
       }
-
       return;
     }
 
-    if (this.npc && !this.isCarrying) {
-      this.npc.setVelocity(this.baseVelocity.x, this.baseVelocity.y);
+    // Check all free-flying NPCs
+    const freeNpcs = this.children.list.filter((child) => {
+      const sprite = child as Phaser.Physics.Arcade.Sprite & { getData?: (key: string) => unknown };
+      if (!sprite || !sprite.active) return false;
+      if (typeof sprite.getData !== 'function') return false;
+      if (!sprite.getData(SKY_RESCUE_NPC_DATA_KEY)) return false;
+      if (sprite.getData('touched')) return false;
+      return true;
+    }) as Phaser.Physics.Arcade.Sprite[];
 
-      // Check if NPC falls off screen
+    for (const npcSprite of freeNpcs) {
+      const spawnT = (npcSprite.getData('spawnTime') as number) || this.time.now;
+      const elapsed = this.time.now - spawnT;
+      const bobAmplitude = 30 + this.currentLevel * 5;
+      const bobFrequency = 0.002 + this.currentLevel * 0.0003;
+      const windBob = Math.sin(elapsed * bobFrequency) * bobAmplitude;
+      const gustX = Math.sin(elapsed * 0.001) * 8;
+
+      const bvx = (npcSprite.getData('baseVx') as number) || -90;
+      const bvy = (npcSprite.getData('baseVy') as number) || 0;
+
+      npcSprite.setVelocity(bvx + gustX, bvy + windBob * 0.03);
+      npcSprite.y += Math.sin(elapsed * bobFrequency) * 0.4;
+
+      // Fail: blown off left edge
       if (
-        this.npc.y > 600 &&
-        !this.npcHasBeenTouched &&
+        npcSprite.x < -40 &&
         !this.drownRestartScheduled &&
         !this.inVictorySequence
       ) {
         this.drownRestartScheduled = true;
         if (!this.failBubbleLayer) {
-          this.failBubbleLayer = mountSkyFailBubbleMessages(this, SKY_CITY_FAIL_MESSAGES);
+          this.failBubbleLayer = mountSkyFailBubbleMessages(this, SKY_SURFING_FAIL_MESSAGES);
         }
         this.drownFailTimer = this.time.delayedCall(SKY_FAIL_FEEDBACK_MS, () => {
           this.drownFailTimer = null;
@@ -371,50 +490,43 @@ class SkyCityGameScene extends Phaser.Scene {
             this.failBubbleLayer.destroy(true);
             this.failBubbleLayer = null;
           }
-          this.levelComplete = false;
           this.drownRestartScheduled = false;
-          this.createNPC();
+          this.restartLevel();
         });
+        return;
       }
 
-      // Check distance to player
+      // Pickup check
       if (this.player) {
         const distance = Phaser.Math.Distance.Between(
-          this.player.x,
-          this.player.y,
-          this.npc.x,
-          this.npc.y
+          this.player.x, this.player.y,
+          npcSprite.x, npcSprite.y
         );
 
-        if (distance < this.helpRadius && !this.npcHasBeenTouched) {
+        if (distance < this.helpRadius) {
           this.cancelPendingDrownRestart();
-          this.npcHasBeenTouched = true;
-          this.isCarrying = true;
-          this.hasExitedBounds = false;
-          this.player.setCollideWorldBounds(false);
-
-          if (this.onHeartEarned) {
-            this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
-            this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
-          }
-          if (this.hearts === 1) {
-            notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
-          }
+          npcSprite.setData('touched', true);
+          npcSprite.setVelocity(0, 0);
+          this.carriedNpcs.push(npcSprite);
+          this.npcsSavedThisLevel += 1;
 
           if (this.particles) {
-            this.particles.emitParticleAt(this.npc.x, this.npc.y, 10);
+            this.particles.emitParticleAt(npcSprite.x, npcSprite.y, 10);
           }
 
-          this.beginRescueCelebration();
+          // Check if all NPCs for this level are now collected
+          if (this.npcsSavedThisLevel >= this.npcsToSaveThisLevel) {
+            this.allCollected = true;
+            this.isCarrying = true;
+            this.hasExitedBounds = false;
+            (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
+
+            this.beginRescueCelebration();
+          }
+          break;
         }
       }
     }
-  }
-
-  nextLevel() {
-    if (this.currentLevel >= MAX_LEVEL) return;
-    this.currentLevel += 1;
-    this.createNPC();
   }
 
   private isCompletelyOutsideCanvas(sprite: Phaser.Physics.Arcade.Sprite, pad: number = 40): boolean {
@@ -440,23 +552,30 @@ class SkyCityGameScene extends Phaser.Scene {
     if (this.lastVictoryHandledSeq === seq) return;
     this.lastVictoryHandledSeq = seq;
 
-    if (this.npc) {
-      this.npc.destroy();
-      this.npc = null;
+    this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+    if (this.onHeartEarned) {
+      this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
     }
+    if (this.hearts === 1) {
+      notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
+    }
+
     this.isCarrying = false;
     this.hasExitedBounds = false;
+    this.allCollected = false;
 
     const cx = this.cameras.main.width / 2;
-    const cy = this.cameras.main.height / 2;
-    this.player?.setPosition(cx, cy);
+    const resetY = this.cameras.main.height * 0.75;
+
+    this.player?.setPosition(cx, resetY);
     this.player?.setVelocity(0, 0);
 
     this.levelComplete = false;
     this.inVictorySequence = false;
     this.player?.setCollideWorldBounds(true);
     if (this.player?.body) {
-      (this.player.body as Phaser.Physics.Arcade.Body).checkCollision.up = false;
+      const body = this.player.body as Phaser.Physics.Arcade.Body;
+      body.checkCollision.up = true;
     }
 
     if (this.currentLevel < MAX_LEVEL) {
@@ -466,13 +585,34 @@ class SkyCityGameScene extends Phaser.Scene {
     }
   }
 
+  private restartLevel(): void {
+    for (const c of this.carriedNpcs) {
+      if (c && c.active) c.destroy();
+    }
+    this.carriedNpcs = [];
+    this.allCollected = false;
+    this.isCarrying = false;
+    this.startLevelWave();
+  }
+
+  nextLevel() {
+    if (this.currentLevel >= MAX_LEVEL) return;
+    this.currentLevel += 1;
+    this.npcsToSaveThisLevel = this.currentLevel;
+    this.startLevelWave();
+  }
+
   togglePause() {
     this.isPaused = !this.isPaused;
 
     if (this.isPaused) {
       this.physics.pause();
+      this.updatePauseText();
     } else {
       this.physics.resume();
+      if (this.pauseText) {
+        this.pauseText.setVisible(false);
+      }
     }
 
     if (this.onPauseStateChange) {
@@ -494,31 +634,30 @@ class SkyCityGameScene extends Phaser.Scene {
 }
 
 // Main Component
-export default function SkyCityGame() {
+export default function SkySurfingGame() {
   const router = useRouter();
   const gameRef = useRef<HTMLDivElement>(null);
-  const [game, setGame] = useState<Phaser.Game | null>(null);
+  const [, setGame] = useState<Phaser.Game | null>(null);
   const [hearts, setHearts] = useState(0);
   const [level, setLevel] = useState(1);
   const [gameState, setGameState] = useState<'playing' | 'complete'>('playing');
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const sceneRef = useRef<SkyCityGameScene | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  const levelMessages: Record<number, string> = {
-    1: 'Thank you for saving me from the rooftop!',
-    2: 'You caught me mid-fall! You are a true hero!',
-    3: 'I thought I was a goner! You are amazing!',
-    4: 'You have incredible reflexes!',
-    5: 'You are the greatest hero in the sky city!',
-  };
-
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
   const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
   const [isAnthemPlaying, setIsAnthemPlaying] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const sceneRef = useRef<SkySurfingGameScene | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const levelMessages: Record<number, string> = {
+    1: 'You caught me before the wind took me away!',
+    2: 'I was swept off my feet — literally! Thank you!',
+    3: "The wind almost carried me off the edge! You're my hero!",
+    4: 'I thought I was gone for good! You saved me!',
+    5: 'You are the ultimate air surfer and rescuer!',
+  };
 
   useEffect(() => {
     if (!showSpeechBubble) return;
@@ -581,29 +720,24 @@ export default function SkyCityGame() {
       width: 800,
       height: 600,
       parent: gameRef.current,
-      backgroundColor: '#87ceeb',
-      render: {
-        antialias: true,
-        antialiasGL: true,
-      },
       physics: {
         default: 'arcade',
         arcade: {
-          gravity: { x: 0, y: 2 },
+          gravity: { x: 0, y: 0 },
           debug: false,
         },
       },
       audio: {
         disableWebAudio: false,
       },
-      scene: SkyCityGameScene,
+      scene: SkySurfingGameScene,
     };
 
     const phaserGame = new Phaser.Game(config);
     let updateInterval: NodeJS.Timeout;
 
     const handleGameReady = () => {
-      const scene = phaserGame.scene.getScene('SkyCityGameScene') as SkyCityGameScene;
+      const scene = phaserGame.scene.getScene('SkySurfingGameScene') as SkySurfingGameScene;
       if (scene) {
         sceneRef.current = scene;
 
@@ -646,7 +780,7 @@ export default function SkyCityGame() {
   }, []);
 
   return (
-    <main className="relative w-full h-screen bg-gradient-to-b from-sky-400 via-blue-500 to-indigo-800 flex flex-col">
+    <main className="relative w-full h-screen bg-gradient-to-b from-cyan-400 via-sky-500 to-blue-700 flex flex-col">
       <div className="relative z-[10050] isolate overflow-visible bg-black/40 backdrop-blur-sm border-b border-white/20 p-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex gap-8">
@@ -684,7 +818,6 @@ export default function SkyCityGame() {
                 onPointerDownCapture={(e) => e.stopPropagation()}
                 onWheelCapture={(e) => e.stopPropagation()}
               >
-                {/* Sky Games Section */}
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Sky Games
                 </div>
@@ -698,7 +831,7 @@ export default function SkyCityGame() {
                   href="/games/sky-city/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
-                  🏙️ Sky City Rescue (Current)
+                  🏙️ Sky City Rescue
                 </Link>
                 <Link
                   href="/games/sky-islands/play"
@@ -716,10 +849,9 @@ export default function SkyCityGame() {
                   href="/games/sky-surfing/play"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
-                  🏄 Air Surfing
+                  🏄 Air Surfing (Current)
                 </Link>
-                
-                {/* Other Games Section */}
+
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">
                   Other Games
                 </div>
@@ -741,8 +873,7 @@ export default function SkyCityGame() {
                 >
                   🏢 Saviour of the City
                 </Link>
-                
-                {/* Home Link */}
+
                 <Link
                   href="/"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
@@ -757,7 +888,7 @@ export default function SkyCityGame() {
 
       <div className="relative z-0 flex-1 flex items-center justify-center overflow-hidden">
         <div ref={gameRef} className="shadow-2xl rounded-lg overflow-hidden" />
-        
+
         {showSpeechBubble && (
           <div className="absolute top-1/4 right-16 animate-in fade-in slide-in-from-right-4 duration-500">
             <div className="bg-white rounded-lg shadow-2xl p-6 max-w-xs relative">
@@ -781,23 +912,24 @@ export default function SkyCityGame() {
             </div>
           </div>
         )}
-
       </div>
 
       <div className="bg-black/40 backdrop-blur-sm border-t border-white/20 p-4">
         <div className="max-w-7xl mx-auto">
-          <p className="text-white/70 text-sm mb-2">City rescue</p>
+          <p className="text-white/70 text-sm mb-2">Surf the Air!</p>
           <p className="text-white/50 text-sm">
-            Arrow keys to move — space bar for pause — one heart per rescue. Finish all five saves to open the completion
-            screen with replay or home.
+            Characters are being blown across the sky by strong winds! Use arrow keys to intercept them before they drift
+            off the left edge. Space bar to pause. After you save everyone, fly up off the top to finish the wave,
+            reset, and earn one heart — collect all five hearts to complete the run.
           </p>
         </div>
       </div>
 
       {gameState === 'complete' && (
         <SkyGameCompletionCard
-          completedPhrase="Sky City Rescue!"
+          completedPhrase="Air Surfing!"
           hearts={hearts}
+          tagline="You've mastered the winds!"
           actionsDisabled={isAnthemPlaying}
           disabledHoverMessage={VICTORY_LOCK_HOVER_MESSAGE}
           actions={
@@ -807,11 +939,11 @@ export default function SkyCityGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/');
+                  window.location.assign('/games/sky-surfing/play');
                 }}
-                className="flex-1 cursor-pointer rounded-lg bg-gradient-to-r from-sky-400 to-blue-500 px-6 py-3 font-semibold text-white transition hover:from-sky-300 hover:to-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 px-6 py-3 text-center font-semibold text-white transition hover:from-cyan-400 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Back Home
+                Ride Again
               </button>
               <button
                 type="button"
@@ -820,9 +952,9 @@ export default function SkyCityGame() {
                   if (isAnthemPlaying) return;
                   router.push('/');
                 }}
-                className="flex-1 rounded-lg bg-gray-400 px-6 py-3 font-semibold text-white transition hover:bg-gray-500 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Home
+                Back Home
               </button>
             </>
           }

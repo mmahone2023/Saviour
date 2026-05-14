@@ -357,8 +357,7 @@ class SkyIslandsGameScene extends Phaser.Scene {
 
       if (
         !this.hasExitedBounds &&
-        this.isCompletelyOutsideCanvas(this.player) &&
-        this.isCompletelyOutsideCanvas(this.npc)
+        this.isCompletelyOutsideCanvas(this.player)
       ) {
         this.hasExitedBounds = true;
         this.npc.destroy();
@@ -723,6 +722,12 @@ export default function SkyIslandsGame() {
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏰 Sky Fortress
+                </Link>
+                <Link
+                  href="/games/sky-surfing/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏄 Air Surfing
                 </Link>
                 
                 {/* Other Games Section */}

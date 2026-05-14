@@ -417,8 +417,7 @@ class SkyGameScene extends Phaser.Scene {
 
       if (
         !this.hasExitedBounds &&
-        this.isCompletelyOutsideCanvas(this.player) &&
-        this.isCompletelyOutsideCanvas(this.npc)
+        this.isCompletelyOutsideCanvas(this.player)
       ) {
         this.hasExitedBounds = true;
         this.npc.destroy();
@@ -814,6 +813,12 @@ export default function SkyGame() {
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
                 >
                   🏰 Sky Fortress
+                </Link>
+                <Link
+                  href="/games/sky-surfing/play"
+                  className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition border-b border-white/10 cursor-pointer"
+                >
+                  🏄 Air Surfing
                 </Link>
 
                 <div className="px-4 py-2 text-white/70 text-xs font-semibold uppercase tracking-wider border-b border-white/10 mt-2">

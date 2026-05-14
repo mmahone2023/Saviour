@@ -27,6 +27,12 @@ export const SKY_FORTRESS_FAIL_MESSAGES = [
   'Another chance incoming…',
 ] as const;
 
+export const SKY_SURFING_FAIL_MESSAGES = [
+  'The wind carried them away!',
+  'Hearts unchanged — ride the next gust and try again!',
+  'Another soul is drifting in… get ready to intercept!',
+] as const;
+
 /**
  * Stacked speech-style bubbles fixed to the camera (survives camera shake if added later).
  */
