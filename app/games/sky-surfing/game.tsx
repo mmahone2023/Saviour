@@ -526,16 +526,6 @@ class SkySurfingGameScene extends Phaser.Scene {
     }
   }
 
-  private isCompletelyOutsideCanvas(sprite: Phaser.Physics.Arcade.Sprite, pad: number = 40): boolean {
-    const v = this.cameras.main.worldView;
-    return (
-      sprite.x < v.x - pad ||
-      sprite.x > v.x + v.width + pad ||
-      sprite.y < v.y - pad ||
-      sprite.y > v.y + v.height + pad
-    );
-  }
-
   private beginRescueCelebration(): void {
     this.cancelPendingDrownRestart();
     this.levelComplete = true;
@@ -558,6 +548,14 @@ class SkySurfingGameScene extends Phaser.Scene {
     this.allCollected = false;
     this.hasExitedBounds = false;
 
+    this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
+    if (this.onHeartEarned) {
+      this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
+    }
+    if (this.hearts === 1) {
+      notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
+    }
+
     const cx = this.cameras.main.width / 2;
     const resetY = this.cameras.main.height * 0.75;
 
@@ -570,14 +568,6 @@ class SkySurfingGameScene extends Phaser.Scene {
     if (this.player?.body) {
       const body = this.player.body as Phaser.Physics.Arcade.Body;
       body.checkCollision.up = true;
-    }
-
-    this.hearts = Math.min(MAX_LEVEL, this.hearts + 1);
-    if (this.onHeartEarned) {
-      this.onHeartEarned(this.hearts, Math.min(MAX_LEVEL, this.currentLevel));
-    }
-    if (this.hearts === 1) {
-      notifySkyArrowFirstRescue(this.skyArrowChallenge, this.time.now);
     }
 
     if (this.currentLevel < MAX_LEVEL) {
@@ -767,6 +757,7 @@ export default function SkySurfingGame() {
         updateInterval = setInterval(() => {
           if (sceneRef.current) {
             setLevel(sceneRef.current.getCurrentLevel());
+            setHearts(sceneRef.current.getHearts());
           }
         }, 50);
       }
