@@ -36,7 +36,7 @@ export default function SeaGamePage() {
           </Link>
 
           <Link
-            href="/"
+            href="/landing"
             className="px-8 py-3 border-2 border-cyan-400/50 text-cyan-300 font-semibold rounded-lg hover:bg-cyan-400/10 transition-all"
           >
             Back Home
