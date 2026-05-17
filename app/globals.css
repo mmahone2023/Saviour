@@ -80,6 +80,8 @@
   
   --animate-float: float 3s ease-in-out infinite;
   --animate-glow-pulse: glow-pulse 2s ease-in-out infinite;
+  --animate-world-breathe: intro-world-breathe 5s ease-in-out infinite;
+  --animate-saviour-title: saviour-title-breathe 5s ease-in-out infinite;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -157,4 +159,56 @@
   }
 }
 
+@keyframes intro-world-breathe {
+  0%,
+  100% {
+    filter: brightness(0.72) saturate(0.9);
+  }
+  50% {
+    filter: brightness(1.18) saturate(1.05);
+  }
+}
+
+@keyframes intro-world-glow {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.48;
+  }
+}
+
+@keyframes saviour-title-breathe {
+  0%,
+  100% {
+    text-shadow:
+      0 0 20px oklch(0.7 0.2 45 / 0.35),
+      0 0 40px oklch(0.75 0.18 85 / 0.2);
+    transform: scale(1);
+  }
+  50% {
+    text-shadow:
+      0 0 32px oklch(0.7 0.2 45 / 0.7),
+      0 0 64px oklch(0.75 0.18 85 / 0.5),
+      0 0 96px oklch(0.65 0.22 30 / 0.25);
+    transform: scale(1.02);
+  }
+}
+
+@layer components {
+  .intro-world {
+    animation: var(--animate-world-breathe);
+  }
+
+  .intro-world-glow {
+    animation: intro-world-glow 5s ease-in-out infinite;
+  }
+
+  .saviour-title {
+    display: inline-block;
+    animation: var(--animate-saviour-title);
+    will-change: transform, text-shadow;
+  }
+}
 
