@@ -6,7 +6,7 @@ const bodySchema = z.object({
   email: z.string().max(320).optional(),
   phone: z.string().max(32).optional(),
   message: z.string().min(1).max(2000),
-  source: z.enum(['sky-fortress-reflection', 'sky-surfing-reflection']).optional(),
+  source: z.enum(['sky-surfing-reflection']).optional(),
 });
 
 const REFLECTION_COLLECTION = 'reflection_submissions';
@@ -125,9 +125,8 @@ export async function POST(req: NextRequest) {
   const email = normalizeEmail(parsed.data.email);
   const phone = normalizePhone(parsed.data.phone);
   const message = parsed.data.message.trim();
-  const source = parsed.data.source ?? 'sky-fortress-reflection';
-  const emailSubject =
-    source === 'sky-surfing-reflection' ? 'Saviour — Air Surfing reflection' : 'Saviour — Sky Fortress reflection';
+  const source = parsed.data.source ?? 'sky-surfing-reflection';
+  const emailSubject = 'Saviour — Air Surfing reflection';
 
   if (!email && !phone) {
     return NextResponse.json(

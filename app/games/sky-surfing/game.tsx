@@ -19,7 +19,8 @@ import {
   SKY_FAIL_FEEDBACK_MS,
   SKY_SURFING_FAIL_MESSAGES,
 } from '@/app/games/sky-rescue-fail-bubbles';
-import { SAVIOUR_BACKGROUND_THEME_PATH, SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
+import { SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
+import { useSaviourThemeAudio } from '@/app/games/saviour-theme-audio-provider';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
 const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
@@ -643,7 +644,7 @@ export default function SkySurfingGame() {
   const sceneRef = useRef<SkySurfingGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
-  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
+  const { setVictorySuppressTheme, setPlaySessionPaused } = useSaviourThemeAudio();
 
   const levelMessages: Record<number, string> = {
     1: 'You caught me before the wind took me away!',
@@ -681,33 +682,14 @@ export default function SkySurfingGame() {
   }, [isMenuOpen]);
 
   useEffect(() => {
-    if (gameState !== 'playing') {
-      backgroundMusicRef.current?.pause();
+    if (gameState === 'playing') {
+      setVictorySuppressTheme(false);
       return;
     }
-    let audio = backgroundMusicRef.current;
-    if (!audio) {
-      audio = new Audio(SAVIOUR_BACKGROUND_THEME_PATH);
-      audio.loop = true;
-      backgroundMusicRef.current = audio;
+    if (gameState === 'complete' && hearts >= 5) {
+      setVictorySuppressTheme(true);
     }
-    if (isPaused) {
-      audio.pause();
-    } else {
-      void audio.play().catch(() => {});
-    }
-  }, [gameState, isPaused]);
-
-  useEffect(() => {
-    return () => {
-      const bg = backgroundMusicRef.current;
-      if (bg) {
-        bg.pause();
-        bg.currentTime = 0;
-        backgroundMusicRef.current = null;
-      }
-    };
-  }, []);
+  }, [gameState, hearts, setVictorySuppressTheme]);
 
   useEffect(() => {
     if (gameState !== 'complete' || hearts < 5) return;
@@ -779,6 +761,7 @@ export default function SkySurfingGame() {
 
         scene.onPauseStateChange = (paused: boolean) => {
           setIsPaused(paused);
+          setPlaySessionPaused(paused);
         };
 
         scene.onArrowDisabledNudge = (message: string) => {
@@ -901,10 +884,10 @@ export default function SkySurfingGame() {
                 </Link>
 
                 <Link
-                  href="/"
+                  href="/landing"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
-                  🏠 Back to Home
+                  🏠 Back Home
                 </Link>
               </div>
             )}
@@ -957,7 +940,7 @@ export default function SkySurfingGame() {
           hearts={hearts}
           tagline={
             <span>
-              You&apos;ve mastered the winds! {levelMessages[5]} Choose home or continue to your reflection.
+              You&apos;ve mastered the winds! {levelMessages[5]} Continue to your reflection or head home.
             </span>
           }
           actionsDisabled={isAnthemPlaying}
@@ -969,22 +952,22 @@ export default function SkySurfingGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/');
+                  router.push('/games/sky-surfing/reflection');
                 }}
-                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg bg-gradient-to-r from-sky-600 to-cyan-700 px-6 py-3 text-center font-semibold text-white shadow-lg transition hover:from-sky-500 hover:to-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Home
+                Continue to Reflection
               </button>
               <button
                 type="button"
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/games/sky-surfing/reflection');
+                  router.push('/landing');
                 }}
-                className="flex-1 rounded-lg bg-gradient-to-r from-sky-600 to-cyan-700 px-6 py-3 text-center font-semibold text-white shadow-lg transition hover:from-sky-500 hover:to-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Reflection
+                Back Home
               </button>
             </>
           }

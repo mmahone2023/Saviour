@@ -19,7 +19,8 @@ import {
   SKY_FAIL_FEEDBACK_MS,
   SKY_FORTRESS_FAIL_MESSAGES,
 } from '@/app/games/sky-rescue-fail-bubbles';
-import { SAVIOUR_BACKGROUND_THEME_PATH, SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
+import { useSaviourThemeAudio } from '@/app/games/saviour-theme-audio-provider';
+import { SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
 
 const MAX_LEVEL = 5;
 const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
@@ -543,7 +544,7 @@ export default function SkyFortressGame() {
   const [isPaused, setIsPaused] = useState(false);
   const [isAnthemPlaying, setIsAnthemPlaying] = useState(false);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
-  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
+  const { setVictorySuppressTheme, setPlaySessionPaused } = useSaviourThemeAudio();
 
   useEffect(() => {
     if (!showSpeechBubble) return;
@@ -590,35 +591,6 @@ export default function SkyFortressGame() {
   }, [isMenuOpen]);
 
   useEffect(() => {
-    if (gameState !== 'playing') {
-      backgroundMusicRef.current?.pause();
-      return;
-    }
-    let audio = backgroundMusicRef.current;
-    if (!audio) {
-      audio = new Audio(SAVIOUR_BACKGROUND_THEME_PATH);
-      audio.loop = true;
-      backgroundMusicRef.current = audio;
-    }
-    if (isPaused) {
-      audio.pause();
-    } else {
-      void audio.play().catch(() => {});
-    }
-  }, [gameState, isPaused]);
-
-  useEffect(() => {
-    return () => {
-      const bg = backgroundMusicRef.current;
-      if (bg) {
-        bg.pause();
-        bg.currentTime = 0;
-        backgroundMusicRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (gameState !== 'complete') return;
     const audio = new Audio(SAVIOUR_VICTORY_ANTHEM_PATH);
     victoryAudioRef.current = audio;
@@ -643,6 +615,14 @@ export default function SkyFortressGame() {
       setIsAnthemPlaying(false);
     };
   }, [gameState]);
+
+  useEffect(() => {
+    setVictorySuppressTheme(gameState === 'complete');
+  }, [gameState, setVictorySuppressTheme]);
+
+  useEffect(() => {
+    setPlaySessionPaused(isPaused);
+  }, [isPaused, setPlaySessionPaused]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -814,7 +794,7 @@ export default function SkyFortressGame() {
                   href="/landing"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
-                  🏠 Back to Home
+                  🏠 Back Home
                 </Link>
               </div>
             )}
@@ -856,7 +836,7 @@ export default function SkyFortressGame() {
           <p className="text-white/70 text-sm mb-2">Defend The Fortress!</p>
           <p className="text-white/50 text-sm">
             Catch fortress dwellers before they fall — arrow keys to move — space bar for pause. One heart per rescue. When
-            you&apos;ve saved everyone, the celebration card appears; then choose reflection or play again.
+            you&apos;ve saved everyone, the celebration card appears; then continue to Air Surfing or go home.
           </p>
         </div>
       </div>
@@ -865,7 +845,7 @@ export default function SkyFortressGame() {
         <SkyGameCompletionCard
           completedPhrase="the Sky Fortress!"
           hearts={hearts}
-          tagline="Continue to your reflection or play another run."
+          tagline="Continue to Air Surfing when you&apos;re ready, or return home."
           actionsDisabled={isAnthemPlaying}
           disabledHoverMessage={VICTORY_LOCK_HOVER_MESSAGE}
           actions={
@@ -875,18 +855,18 @@ export default function SkyFortressGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/games/sky-fortress/reflection');
+                  router.push('/games/sky-surfing/play');
                 }}
                 className="flex-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-3 font-semibold text-white shadow-lg transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Continue to reflection
+                Continue to Air Surfing
               </button>
               <button
                 type="button"
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  window.location.assign('/');
+                  router.push('/landing');
                 }}
                 className="flex-1 rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >

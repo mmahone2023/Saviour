@@ -28,8 +28,8 @@ export default function SkyGamePage() {
         </h1>
 
         <p className="text-sky-100/90 max-w-md mb-8 text-lg">
-          Soar through the clouds and rescue everyone in danger. Each save earns one heart toward five. After you&apos;ve
-          earned all five hearts, a popup celebrates your run; then you can choose the next sky adventure or go home.
+          Soar through the clouds and rescue the falling characters in danger. &nbsp;Each save earns one heart. &nbsp;After you&apos;ve
+          earned all five hearts, celebrate to the Victory Anthem! Then you can choose the next sky adventure or go home.
         </p>
 
         <div className="flex gap-4">

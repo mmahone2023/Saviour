@@ -19,7 +19,8 @@ import {
   SKY_FAIL_FEEDBACK_MS,
   SKY_ISLANDS_FAIL_MESSAGES,
 } from '@/app/games/sky-rescue-fail-bubbles';
-import { SAVIOUR_BACKGROUND_THEME_PATH, SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
+import { useSaviourThemeAudio } from '@/app/games/saviour-theme-audio-provider';
+import { SAVIOUR_VICTORY_ANTHEM_PATH } from '@/lib/saviour-theme-audio';
 
 const SPEECH_BUBBLE_RESCUE_MS = 10000;
 const VICTORY_LOCK_HOVER_MESSAGE = 'After celebrating to the victory Anthem, you can choose your destiny!';
@@ -527,13 +528,13 @@ export default function SkyIslandsGame() {
   const [showSpeechBubble, setShowSpeechBubble] = useState(false);
   const [speechMessage, setSpeechMessage] = useState('');
   const [speechBubbleIsArrowLockout, setSpeechBubbleIsArrowLockout] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [isAnthemPlaying, setIsAnthemPlaying] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
   const sceneRef = useRef<SkyIslandsGameScene | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const victoryAudioRef = useRef<HTMLAudioElement | null>(null);
-  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
+  const { setVictorySuppressTheme, setPlaySessionPaused } = useSaviourThemeAudio();
 
   const levelMessages: Record<number, string> = {
     1: 'Thank you for saving me from the void!',
@@ -571,35 +572,6 @@ export default function SkyIslandsGame() {
   }, [isMenuOpen]);
 
   useEffect(() => {
-    if (gameState !== 'playing') {
-      backgroundMusicRef.current?.pause();
-      return;
-    }
-    let audio = backgroundMusicRef.current;
-    if (!audio) {
-      audio = new Audio(SAVIOUR_BACKGROUND_THEME_PATH);
-      audio.loop = true;
-      backgroundMusicRef.current = audio;
-    }
-    if (isPaused) {
-      audio.pause();
-    } else {
-      void audio.play().catch(() => {});
-    }
-  }, [gameState, isPaused]);
-
-  useEffect(() => {
-    return () => {
-      const bg = backgroundMusicRef.current;
-      if (bg) {
-        bg.pause();
-        bg.currentTime = 0;
-        backgroundMusicRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (gameState !== 'complete') return;
     const audio = new Audio(SAVIOUR_VICTORY_ANTHEM_PATH);
     victoryAudioRef.current = audio;
@@ -624,6 +596,14 @@ export default function SkyIslandsGame() {
       setIsAnthemPlaying(false);
     };
   }, [gameState]);
+
+  useEffect(() => {
+    setVictorySuppressTheme(gameState === 'complete');
+  }, [gameState, setVictorySuppressTheme]);
+
+  useEffect(() => {
+    setPlaySessionPaused(isPaused);
+  }, [isPaused, setPlaySessionPaused]);
 
   useEffect(() => {
     if (!gameRef.current) return;
@@ -794,7 +774,7 @@ export default function SkyIslandsGame() {
                   href="/landing"
                   className="block w-full text-left px-4 py-3 text-white hover:bg-white/10 transition last:rounded-b-lg cursor-pointer"
                 >
-                  🏠 Back to Home
+                  🏠 Back Home
                 </Link>
               </div>
             )}
@@ -853,7 +833,7 @@ export default function SkyIslandsGame() {
                 disabled={isAnthemPlaying}
                 onClick={() => {
                   if (isAnthemPlaying) return;
-                  router.push('/');
+                  router.push('/landing');
                 }}
                 className="flex-1 cursor-pointer rounded-lg border-2 border-slate-400 bg-white px-6 py-3 font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >

@@ -1,0 +1,14 @@
+---
+description: Never add Co-authored-by or other co-author trailers to git commits
+alwaysApply: true
+---
+
+# Git commits — no co-author trailers
+
+When creating commits for this repository:
+
+- Do **not** add `Co-authored-by:` lines or any co-author / trailer metadata to commit messages.
+- Do **not** use `git commit --trailer` (or similar) to attach co-author information.
+- Write only the human-authored commit message the user requested.
+
+If a commit hook strips co-author text, do not re-add it.

@@ -73,7 +73,7 @@ export default function SkyFortressPage() {
             🏰 Sky Fortress
           </h1>
           <p className="text-2xl text-white/90 drop-shadow-md">
-            Earn all five rescue hearts — then see the popup and reflection when you&apos;re ready for what&apos;s next.
+            Earn all five rescue hearts — then continue to Air Surfing when you&apos;re ready for what&apos;s next.
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export default function SkyFortressPage() {
             </h2>
             <p className="text-base leading-relaxed">
               Catch the fortress dwellers as they fall. After five successful rescues (five hearts), the celebratory popup
-              appears and you can proceed to reflection or wrap up from the screens that follow.
+              appears and you can continue to Air Surfing or return home from the screens that follow.
             </p>
           </div>
 
@@ -97,7 +97,7 @@ export default function SkyFortressPage() {
               <li>• Use <strong>Arrow Keys</strong> to move</li>
               <li>• Catch falling dwellers — one heart per rescue (five total)</li>
               <li>• The &quot;5 hearts&quot; popup appears only after your fifth successful save</li>
-              <li>• Then continue to reflection or exit from the screens that follow</li>
+              <li>• Then continue to Air Surfing or exit from the screens that follow</li>
             </ul>
           </div>
 
